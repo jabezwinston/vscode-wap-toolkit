@@ -1,0 +1,521 @@
+{
+  "name": "wap-toolkit",
+  "displayName": "WAP Toolkit",
+  "description": "Complete toolkit for WML & WMLScript authoring, preview and debugging",
+  "version": "0.5.0",
+  "publisher": "jabezwinston",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jabezwinston/vscode-wap-toolkit"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Snippets",
+    "Formatters"
+  ],
+  "keywords": [
+    "wml",
+    "wap",
+    "wmlscript",
+    "wcss",
+    "wbxml",
+    "wireless markup language"
+  ],
+  "icon": "media/wap-phone.png",
+  "activationEvents": [
+    "onLanguage:wbxml",
+    "onLanguage:wmlsc",
+    "workspaceContains:**/*.wml",
+    "workspaceContains:**/*.wmlc",
+    "onDebug"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "wml",
+        "aliases": [
+          "WML",
+          "Wireless Markup Language"
+        ],
+        "extensions": [
+          ".wml"
+        ],
+        "configuration": "./language-configuration/wml.language-configuration.json",
+        "icon": {
+          "light": "media/wml-icon.png",
+          "dark": "media/wml-icon.png"
+        }
+      },
+      {
+        "id": "wmlscript",
+        "aliases": [
+          "WMLScript",
+          "WML Script"
+        ],
+        "extensions": [
+          ".wmls"
+        ],
+        "configuration": "./language-configuration/wmlscript.language-configuration.json",
+        "icon": {
+          "light": "media/wmls-icon.png",
+          "dark": "media/wmls-icon.png"
+        }
+      },
+      {
+        "id": "wcss",
+        "aliases": [
+          "WCSS",
+          "WAP CSS"
+        ],
+        "extensions": [
+          ".wcss"
+        ],
+        "configuration": "./language-configuration/wcss.language-configuration.json",
+        "icon": {
+          "light": "media/wcss-icon.png",
+          "dark": "media/wcss-icon.png"
+        }
+      },
+      {
+        "id": "wbxml",
+        "aliases": [
+          "WBXML",
+          "WML Binary XML"
+        ],
+        "extensions": [
+          ".wbxml",
+          ".wmlc"
+        ],
+        "icon": {
+          "light": "media/wbxml-icon.png",
+          "dark": "media/wbxml-icon.png"
+        }
+      },
+      {
+        "id": "wmlsc",
+        "aliases": [
+          "WMLSC",
+          "WMLScript Bytecode"
+        ],
+        "extensions": [
+          ".wmlsc"
+        ],
+        "icon": {
+          "light": "media/wmlsc-icon.png",
+          "dark": "media/wmlsc-icon.png"
+        }
+      },
+      {
+        "id": "wbmp",
+        "aliases": [
+          "WBMP",
+          "Wireless Bitmap"
+        ],
+        "extensions": [
+          ".wbmp"
+        ],
+        "icon": {
+          "light": "media/wbmp-icon.png",
+          "dark": "media/wbmp-icon.png"
+        }
+      },
+      {
+        "id": "wmlsc-disasm",
+        "aliases": [
+          "WMLSC Disassembly"
+        ]
+      }
+    ],
+    "grammars": [
+      {
+        "language": "wml",
+        "scopeName": "text.xml.wml",
+        "path": "./syntaxes/wml.tmLanguage.json"
+      },
+      {
+        "language": "wmlscript",
+        "scopeName": "source.wmlscript",
+        "path": "./syntaxes/wmlscript.tmLanguage.json"
+      },
+      {
+        "language": "wcss",
+        "scopeName": "source.wcss",
+        "path": "./syntaxes/wcss.tmLanguage.json"
+      },
+      {
+        "language": "wmlsc-disasm",
+        "scopeName": "source.wmlsc-disasm",
+        "path": "./syntaxes/wmlsc-disasm.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "wml",
+        "path": "./snippets/wml.json"
+      },
+      {
+        "language": "wmlscript",
+        "path": "./snippets/wmlscript.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "wml.toggleServer",
+        "title": "Toggle WML Server",
+        "category": "WAP Toolkit",
+        "icon": "$(play)"
+      },
+      {
+        "command": "wml.toggleWapServer",
+        "title": "Toggle WAP Server (WSP/HTTP)",
+        "category": "WAP Toolkit",
+        "icon": "$(broadcast)"
+      },
+      {
+        "command": "wml.previewWmlSidePanel",
+        "title": "Preview WML",
+        "category": "WAP Toolkit",
+        "icon": "$(open-preview)"
+      },
+      {
+        "command": "wml.convertToWbxml",
+        "title": "Compile WML",
+        "category": "WAP Toolkit"
+      },
+      {
+        "command": "wml.convertFromWbxml",
+        "title": "Convert WBXML/WMLC to WML",
+        "category": "WAP Toolkit"
+      },
+      {
+        "command": "wml.stopPreviewServer",
+        "title": "Stop Preview Server",
+        "category": "WAP Toolkit"
+      },
+      {
+        "command": "wml.compileWmls",
+        "title": "Compile WMLScript",
+        "category": "WAP Toolkit"
+      },
+      {
+        "command": "wml.disassembleWmlsc",
+        "title": "Disassemble WMLSC Bytecode",
+        "category": "WAP Toolkit"
+      },
+      {
+        "command": "wml.runWmls",
+        "title": "Run WMLScript",
+        "category": "WAP Toolkit"
+      },
+      {
+        "command": "wml.convertToWbmp",
+        "title": "Convert Image to WBMP",
+        "category": "WAP Toolkit"
+      },
+      {
+        "command": "wml.openBrowser",
+        "title": "Browser",
+        "category": "WAP Toolkit",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "wml.debugWmlPreview",
+        "title": "Debug WML Preview",
+        "category": "WAP Toolkit",
+        "icon": "$(debug-alt)"
+      },
+      {
+        "command": "wml.debugWapBrowser",
+        "title": "Debug WAP Browser",
+        "category": "WAP Toolkit",
+        "icon": "$(debug-alt)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "wml.previewWmlSidePanel",
+        "key": "ctrl+shift+v",
+        "mac": "cmd+shift+v",
+        "when": "editorLangId == wml"
+      },
+      {
+        "command": "wml.debugWmlPreview",
+        "key": "ctrl+k d",
+        "mac": "cmd+k d",
+        "when": "editorLangId == wml"
+      },
+      {
+        "command": "wml.debugWapBrowser",
+        "key": "ctrl+shift+i",
+        "mac": "cmd+shift+i",
+        "when": "activeWebviewPanelId == 'wapBrowser'"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "wml.previewWmlSidePanel",
+          "when": "resourceLangId == wml",
+          "group": "navigation"
+        },
+        {
+          "command": "wml.debugWmlPreview",
+          "when": "resourceLangId == wml",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "wml.convertToWbxml",
+          "when": "resourceLangId == wml",
+          "group": "wml"
+        },
+        {
+          "command": "wml.compileWmls",
+          "when": "resourceLangId == wmlscript",
+          "group": "wmlscript"
+        },
+        {
+          "command": "wml.runWmls",
+          "when": "resourceLangId == wmlscript",
+          "group": "wmlscript"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "wml.convertToWbxml",
+          "when": "resourceExtname == .wml",
+          "group": "wml"
+        },
+        {
+          "command": "wml.convertFromWbxml",
+          "when": "resourceExtname == .wbxml || resourceExtname == .wmlc",
+          "group": "wml"
+        },
+        {
+          "command": "wml.compileWmls",
+          "when": "resourceExtname == .wmls",
+          "group": "wmlscript"
+        },
+        {
+          "command": "wml.disassembleWmlsc",
+          "when": "resourceExtname == .wmlsc",
+          "group": "wmlscript"
+        },
+        {
+          "command": "wml.runWmls",
+          "when": "resourceExtname == .wmls || resourceExtname == .wmlsc",
+          "group": "wmlscript"
+        },
+        {
+          "command": "wml.convertToWbmp",
+          "when": "resourceExtname == .png || resourceExtname == .jpg || resourceExtname == .jpeg || resourceExtname == .bmp || resourceExtname == .otb",
+          "group": "wml"
+        }
+      ]
+    },
+    "customEditors": [
+      {
+        "viewType": "wml.wbmpViewer",
+        "displayName": "WBMP Image Viewer",
+        "selector": [
+          {
+            "filenamePattern": "*.wbmp"
+          }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "wml.wmlscDisassembly",
+        "displayName": "WMLSC Disassembly",
+        "selector": [
+          {
+            "filenamePattern": "*.wmlsc"
+          }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "wml.wbxmlViewer",
+        "displayName": "WBXML Decompiled WML",
+        "selector": [
+          {
+            "filenamePattern": "*.wbxml"
+          },
+          {
+            "filenamePattern": "*.wmlc"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "breakpoints": [
+      {
+        "language": "wmlscript"
+      },
+      {
+        "language": "wmlsc-disasm"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "wmlscript",
+        "label": "WMLScript Debug",
+        "languages": [
+          "wmlscript"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "required": [
+              "program"
+            ],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Path to the .wmls or .wmlsc file to debug",
+                "default": "${file}"
+              },
+              "function": {
+                "type": "string",
+                "description": "Name of the function to execute",
+                "default": "main"
+              },
+              "args": {
+                "type": "array",
+                "description": "Arguments to pass to the function",
+                "default": []
+              },
+              "maxSteps": {
+                "type": "number",
+                "description": "Maximum number of VM steps before aborting",
+                "default": 10000000
+              }
+            }
+          },
+          "attach": {
+            "required": [],
+            "properties": {
+              "target": {
+                "type": "string",
+                "enum": [
+                  "preview",
+                  "browser"
+                ],
+                "description": "What to attach to: the WML preview webview ('preview', default) or the WAP Browser's bytecode VM ('browser')",
+                "default": "preview"
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "wmlscript",
+            "request": "attach",
+            "name": "Debug WML Preview"
+          },
+          {
+            "type": "wmlscript",
+            "request": "attach",
+            "target": "browser",
+            "name": "Debug WAP Browser"
+          },
+          {
+            "type": "wmlscript",
+            "request": "launch",
+            "name": "Debug WMLScript",
+            "program": "${file}",
+            "function": "main"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "WMLScript: Debug WML Preview (attach)",
+            "description": "Debug WMLScript live in the WML preview",
+            "body": {
+              "type": "wmlscript",
+              "request": "attach",
+              "name": "Debug WML Preview"
+            }
+          },
+          {
+            "label": "WMLScript: Debug WAP Browser (attach)",
+            "description": "Debug WMLScript running on the bytecode VM in the WAP Browser",
+            "body": {
+              "type": "wmlscript",
+              "request": "attach",
+              "target": "browser",
+              "name": "Debug WAP Browser"
+            }
+          },
+          {
+            "label": "WMLScript: Launch",
+            "description": "Launch and debug a WMLScript file",
+            "body": {
+              "type": "wmlscript",
+              "request": "launch",
+              "name": "Debug WMLScript",
+              "program": "^\"${1:\\${file\\}}\"",
+              "function": "${2:main}"
+            }
+          }
+        ]
+      }
+    ],
+    "configuration": {
+      "title": "WAP Toolkit",
+      "properties": {
+        "wap.wml.preview.port": {
+          "type": "number",
+          "default": 2703,
+          "description": "Port number for the WML preview server"
+        },
+        "wap.wspPort": {
+          "type": "number",
+          "default": 9200,
+          "description": "WSP connectionless (UDP) port for the WAP server"
+        },
+        "wap.wspCoPort": {
+          "type": "number",
+          "default": 9201,
+          "description": "WSP connection-oriented (UDP) port for the WAP server"
+        },
+        "wap.httpPort": {
+          "type": "number",
+          "default": 3003,
+          "description": "WAP-over-HTTP port for serving text WML/WMLScript files"
+        },
+        "wap.wml.preview.phoneFrame": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show phone frame around WML preview"
+        },
+        "wap.wml.preview.autoRefresh": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-refresh preview on file save"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "copy-assets": "mkdir -p out/wmlRender out/browser out/shared && cp src/wmlRender/*.js src/wmlRender/*.css out/wmlRender/ && cp src/browser/*.js src/browser/*.css out/browser/ && cp src/shared/*.js src/shared/*.css out/shared/",
+    "compile": "tsc -p ./ && npm run copy-assets",
+    "watch": "npm run copy-assets && tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "test": "tsc -p ./ && node --test test/"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.2"
+  },
+  "dependencies": {
+    "jpeg-js": "^0.4.4"
+  }
+}

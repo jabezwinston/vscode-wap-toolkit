@@ -1,0 +1,32 @@
+{
+  "comments": {
+    "blockComment": ["<!--", "-->"]
+  },
+  "brackets": [
+    ["(", ")"]
+  ],
+  "autoClosingPairs": [
+    { "open": "\"" , "close": "\"", "notIn": ["string"] },
+    { "open": "'", "close": "'", "notIn": ["string"] },
+    { "open": "<!--", "close": "-->", "notIn": ["comment"] },
+    { "open": "$(", "close": ")", "notIn": ["comment"] }
+  ],
+  "surroundingPairs": [
+    ["\"" , "\""],
+    ["'", "'"]
+  ],
+  "colorizedBracketPairs": [
+    ["(", ")"]
+  ],
+  "folding": {
+    "markers": {
+      "start": "^\\s*<(wml|card|head|template|p|table|tr|select|optgroup|fieldset|do|anchor|go|onevent|pre)\\b",
+      "end": "^\\s*</(wml|card|head|template|p|table|tr|select|optgroup|fieldset|do|anchor|go|onevent|pre)>"
+    }
+  },
+  "indentationRules": {
+    "increaseIndentPattern": "<(?!\\?|!|/|br|img|input|meta|hr|access|setvar|postfield|timer|noop|prev)[a-zA-Z][^/>]*>(?!.*</\\1)",
+    "decreaseIndentPattern": "^\\s*</"
+  },
+  "wordPattern": "[a-zA-Z_$][a-zA-Z0-9_$-]*"
+}

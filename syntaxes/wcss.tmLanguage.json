@@ -1,0 +1,133 @@
+{
+  "name": "WCSS (WAP CSS)",
+  "scopeName": "source.wcss",
+  "fileTypes": ["wcss"],
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#selector" },
+    { "include": "#rule-list" },
+    { "include": "#at-rule" }
+  ],
+  "repository": {
+    "comment": {
+      "name": "comment.block.wcss",
+      "begin": "/\\*",
+      "end": "\\*/"
+    },
+    "at-rule": {
+      "patterns": [
+        {
+          "name": "keyword.control.at-rule.wcss",
+          "match": "@(import|media|charset)\\b"
+        }
+      ]
+    },
+    "selector": {
+      "patterns": [
+        {
+          "name": "entity.name.tag.wcss",
+          "match": "\\b(body|p|a|b|i|u|em|strong|big|small|br|img|input|select|option|optgroup|table|tr|td|fieldset|pre|anchor|card|wml|do|go|prev|refresh|noop|onevent|setvar|timer|template|head|meta|access|postfield)\\b"
+        },
+        {
+          "name": "entity.other.attribute-name.class.wcss",
+          "match": "\\.[a-zA-Z_][a-zA-Z0-9_-]*"
+        },
+        {
+          "name": "entity.other.attribute-name.id.wcss",
+          "match": "#[a-zA-Z_][a-zA-Z0-9_-]*"
+        },
+        {
+          "name": "entity.other.attribute-name.pseudo-class.wcss",
+          "match": ":(link|visited|focus|active)"
+        },
+        {
+          "name": "punctuation.separator.wcss",
+          "match": "[>+~,]"
+        }
+      ]
+    },
+    "rule-list": {
+      "name": "meta.property-list.wcss",
+      "begin": "\\{",
+      "beginCaptures": {
+        "0": { "name": "punctuation.section.property-list.begin.wcss" }
+      },
+      "end": "\\}",
+      "endCaptures": {
+        "0": { "name": "punctuation.section.property-list.end.wcss" }
+      },
+      "patterns": [
+        { "include": "#comment" },
+        { "include": "#property" }
+      ]
+    },
+    "property": {
+      "patterns": [
+        {
+          "name": "meta.property-value.wcss",
+          "begin": "\\b(display|color|background-color|font-family|font-size|font-style|font-weight|font-variant|text-align|text-decoration|text-indent|text-transform|vertical-align|white-space|list-style-type|list-style-position|margin|margin-top|margin-right|margin-bottom|margin-left|padding|padding-top|padding-right|padding-bottom|padding-left|border-top-style|border-top-width|border-top-color|border-right-style|border-right-width|border-right-color|border-bottom-style|border-bottom-width|border-bottom-color|border-left-style|border-left-width|border-left-color|width|height|float|clear|overflow|visibility|content|quotes)\\s*:",
+          "beginCaptures": {
+            "1": { "name": "support.type.property-name.wcss" }
+          },
+          "end": ";|(?=\\})",
+          "patterns": [
+            { "include": "#property-value" }
+          ]
+        },
+        {
+          "name": "meta.property-value.wap-extension.wcss",
+          "begin": "(-wap-marquee-style|-wap-marquee-loop|-wap-marquee-dir|-wap-marquee-speed|-wap-input-format|-wap-input-required|-wap-accesskey)\\s*:",
+          "beginCaptures": {
+            "1": { "name": "support.type.property-name.wap.wcss" }
+          },
+          "end": ";|(?=\\})",
+          "patterns": [
+            { "include": "#property-value" }
+          ]
+        }
+      ]
+    },
+    "property-value": {
+      "patterns": [
+        {
+          "name": "support.constant.property-value.wcss",
+          "match": "\\b(none|auto|inherit|normal|bold|bolder|lighter|italic|oblique|underline|overline|line-through|blink|capitalize|uppercase|lowercase|left|right|center|justify|top|middle|bottom|baseline|sub|super|text-top|text-bottom|block|inline|list-item|-wap-marquee|hidden|visible|scroll|solid|dotted|dashed|double|groove|ridge|inset|outset|thin|medium|thick|disc|circle|square|decimal|lower-alpha|upper-alpha|lower-roman|upper-roman|inside|outside|nowrap|pre|pre-wrap|small-caps|collapse|separate)\\b"
+        },
+        {
+          "name": "support.constant.wap-extension.wcss",
+          "match": "\\b(scroll|slide|alternate|infinite|rtl|ltr|slow|medium|fast|true|false)\\b"
+        },
+        {
+          "name": "constant.other.color.hex.wcss",
+          "match": "#[0-9a-fA-F]{3,8}\\b"
+        },
+        {
+          "name": "support.constant.color.named.wcss",
+          "match": "\\b(black|silver|gray|white|maroon|red|purple|fuchsia|green|lime|olive|yellow|navy|blue|teal|aqua)\\b"
+        },
+        {
+          "name": "constant.numeric.wcss",
+          "match": "-?[0-9]+(\\.[0-9]+)?(px|em|ex|pt|pc|cm|mm|in|%)?\\b"
+        },
+        {
+          "name": "support.constant.font-family.wcss",
+          "match": "\\b(sans-serif|serif|monospace|cursive|fantasy)\\b"
+        },
+        {
+          "name": "support.constant.font-size.wcss",
+          "match": "\\b(xx-small|x-small|small|medium|large|x-large|xx-large|smaller|larger)\\b"
+        },
+        {
+          "name": "string.quoted.double.wcss",
+          "begin": "\"",
+          "end": "\""
+        },
+        {
+          "name": "string.quoted.single.wcss",
+          "begin": "'",
+          "end": "'"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,412 @@
+/* WAP Browser — VS Code Webview Styles (browser-specific; shared styles in ../shared/wml-elements.css) */
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--vscode-editor-background, #1e1e1e);
+    color: var(--vscode-editor-foreground, #ccc);
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+}
+
+/* ── Browser Chrome ──────────────────────────────────────── */
+
+.browser-chrome {
+    flex-shrink: 0;
+    background: var(--vscode-titleBar-activeBackground, #1e1e1e);
+    border-bottom: 1px solid var(--vscode-panel-border, #444);
+    padding: 6px 10px;
+}
+
+.address-bar {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+}
+
+.address-bar button {
+    background: var(--vscode-button-secondaryBackground, #333);
+    color: var(--vscode-button-secondaryForeground, #ccc);
+    border: 1px solid var(--vscode-input-border, #555);
+    border-radius: 3px;
+    padding: 4px 10px;
+    cursor: pointer;
+    font-size: 13px;
+    line-height: 1.3;
+    min-width: 32px;
+}
+.address-bar button:hover {
+    background: var(--vscode-button-secondaryHoverBackground, #444);
+}
+.address-bar button:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+/* Debug button while a session is active. */
+.address-bar button.active {
+    background: var(--vscode-statusBarItem-warningBackground, #7a5c00);
+    border-color: var(--vscode-focusBorder, #e2a600);
+}
+
+#url-input {
+    flex: 1;
+    background: var(--vscode-input-background, #2a2a2a);
+    color: var(--vscode-input-foreground, #eee);
+    border: 1px solid var(--vscode-input-border, #555);
+    border-radius: 3px;
+    padding: 4px 8px;
+    font-size: 13px;
+    font-family: monospace;
+    outline: none;
+}
+#url-input:focus {
+    border-color: var(--vscode-focusBorder, #007acc);
+}
+
+.status-bar {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground, #888);
+    padding: 2px 0 0 0;
+    min-height: 16px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.status-bar.error {
+    color: var(--vscode-errorForeground, #f44);
+}
+
+/* ── Phone Container ─────────────────────────────────────── */
+
+.phone-container {
+    flex: 1;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    overflow: auto;
+    padding: 16px;
+}
+
+/* ── Browser Phone Frame Overrides ───────────────────────── */
+
+.wap-phone-frame {
+    display: flex;
+    flex-direction: column;
+}
+.phone-title {
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.phone-softkeys {
+    flex-shrink: 0;
+}
+/* .softkey:empty is now in shared/wml-elements.css (shared with the preview). */
+
+/* ── Loading / Empty States ──────────────────────────────── */
+
+.browser-welcome {
+    text-align: center;
+    padding: 40px 16px;
+    color: #888;
+}
+.browser-welcome h2 {
+    font-size: 14px;
+    margin-bottom: 8px;
+    color: #aaa;
+}
+.browser-welcome p {
+    font-size: 12px;
+}
+
+.loading-indicator {
+    text-align: center;
+    padding: 20px;
+    color: #4fc3f7;
+    font-size: 12px;
+}
+
+/* .dialog-* (WMLScript Dialogs modal) is now in shared/wml-elements.css
+   (shared with the WML preview). */
+
+/* ── Browser Menu ───────────────────────────────────────── */
+
+.browser-menu {
+    display: none;
+    position: absolute;
+    right: 10px;
+    top: 38px;
+    background: var(--vscode-menu-background, #2a2a2a);
+    border: 1px solid var(--vscode-menu-border, #555);
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    z-index: 100;
+    min-width: 160px;
+    overflow: hidden;
+}
+.browser-menu.visible {
+    display: block;
+}
+.browser-chrome {
+    position: relative;
+}
+
+.menu-item {
+    display: block;
+    width: 100%;
+    background: none;
+    border: none;
+    color: var(--vscode-menu-foreground, #ccc);
+    padding: 7px 14px;
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.menu-item:hover {
+    background: var(--vscode-menu-selectionBackground, #094771);
+    color: var(--vscode-menu-selectionForeground, #fff);
+}
+
+/* ── Image Context Menu ──────────────────────────────────── */
+
+.img-context-menu {
+    display: none;
+    position: fixed;
+    z-index: 300;
+    background: var(--vscode-menu-background, #2a2a2a);
+    border: 1px solid var(--vscode-menu-border, #555);
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    min-width: 140px;
+    overflow: hidden;
+}
+
+/* ── Downloads Panel ────────────────────────────────────── */
+
+.downloads-overlay {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.45);
+    z-index: 250;
+    justify-content: center;
+    align-items: center;
+}
+.downloads-overlay.visible {
+    display: flex;
+}
+
+.downloads-panel {
+    background: var(--vscode-editorWidget-background, #252526);
+    border: 1px solid var(--vscode-editorWidget-border, #555);
+    border-radius: 8px;
+    width: 340px;
+    max-height: 70vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+}
+
+.downloads-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--vscode-panel-border, #444);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--vscode-foreground, #ccc);
+}
+.downloads-close {
+    background: none;
+    border: none;
+    color: var(--vscode-foreground, #888);
+    font-size: 14px;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 3px;
+}
+.downloads-close:hover {
+    background: var(--vscode-toolbar-hoverBackground, #333);
+}
+
+.downloads-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 0;
+}
+
+.downloads-empty {
+    text-align: center;
+    padding: 24px 16px;
+    color: var(--vscode-descriptionForeground, #888);
+    font-size: 12px;
+}
+
+.download-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 14px;
+    gap: 8px;
+}
+.download-item:hover {
+    background: var(--vscode-list-hoverBackground, #2a2d2e);
+}
+
+.download-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.download-name {
+    font-size: 12px;
+    color: var(--vscode-foreground, #ccc);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.download-meta {
+    font-size: 10px;
+    color: var(--vscode-descriptionForeground, #888);
+}
+
+.download-actions {
+    display: flex;
+    gap: 2px;
+    flex-shrink: 0;
+}
+.download-action-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 3px;
+    font-size: 13px;
+    line-height: 1;
+}
+.download-action-btn:hover {
+    background: var(--vscode-toolbar-hoverBackground, #333);
+}
+
+.downloads-actions {
+    padding: 8px 14px;
+    border-top: 1px solid var(--vscode-panel-border, #444);
+    display: flex;
+    justify-content: flex-end;
+}
+
+/* ── History Panel ──────────────────────────────────────── */
+
+.history-item {
+    cursor: pointer;
+}
+
+/* ── Settings Panel ─────────────────────────────────────── */
+
+.settings-overlay {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.45);
+    z-index: 250;
+    justify-content: center;
+    align-items: center;
+}
+.settings-overlay.visible {
+    display: flex;
+}
+
+.settings-panel {
+    background: var(--vscode-editorWidget-background, #252526);
+    border: 1px solid var(--vscode-editorWidget-border, #555);
+    border-radius: 8px;
+    width: 320px;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+}
+
+.settings-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--vscode-panel-border, #444);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--vscode-foreground, #ccc);
+}
+
+.settings-body {
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.settings-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.settings-label {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground, #888);
+    margin-top: 2px;
+}
+
+.settings-input {
+    background: var(--vscode-input-background, #2a2a2a);
+    color: var(--vscode-input-foreground, #eee);
+    border: 1px solid var(--vscode-input-border, #555);
+    border-radius: 3px;
+    padding: 4px 8px;
+    font-size: 12px;
+    font-family: monospace;
+    outline: none;
+    width: 100%;
+    box-sizing: border-box;
+}
+.settings-input:focus {
+    border-color: var(--vscode-focusBorder, #007acc);
+}
+
+select.settings-input {
+    cursor: pointer;
+    font-family: inherit;
+}
+
+.settings-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.settings-input-short {
+    width: 72px;
+    flex: none;
+}
+.settings-x {
+    font-size: 12px;
+    color: var(--vscode-descriptionForeground, #888);
+}
+.settings-unit {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground, #888);
+}
+
+.settings-footer {
+    padding: 8px 14px;
+    border-top: 1px solid var(--vscode-panel-border, #444);
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}

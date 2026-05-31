@@ -1,0 +1,257 @@
+{
+  "name": "WMLScript",
+  "scopeName": "source.wmlscript",
+  "fileTypes": ["wmls"],
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#string" },
+    { "include": "#number" },
+    { "include": "#keyword" },
+    { "include": "#function-declaration" },
+    { "include": "#stdlib" },
+    { "include": "#constant" },
+    { "include": "#operator" },
+    { "include": "#variable" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comment": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.wmlscript",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.wmlscript",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "string": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.wmlscript",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.wmlscript",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.wmlscript",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            {
+              "name": "constant.character.escape.wmlscript",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "number": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.wmlscript",
+          "match": "\\b0[xX][0-9a-fA-F]+\\b"
+        },
+        {
+          "name": "constant.numeric.octal.wmlscript",
+          "match": "\\b0[0-7]+\\b"
+        },
+        {
+          "name": "constant.numeric.float.wmlscript",
+          "match": "\\b[0-9]+\\.[0-9]+([eE][+-]?[0-9]+)?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.wmlscript",
+          "match": "\\b[0-9]+\\b"
+        }
+      ]
+    },
+    "keyword": {
+      "patterns": [
+        {
+          "name": "storage.type.wmlscript",
+          "match": "\\b(var)\\b"
+        },
+        {
+          "name": "storage.modifier.wmlscript",
+          "match": "\\b(extern)\\b"
+        },
+        {
+          "name": "keyword.control.wmlscript",
+          "match": "\\b(if|else|while|for|break|continue|return)\\b"
+        },
+        {
+          "name": "keyword.other.wmlscript",
+          "match": "\\b(function|use|url|access|domain|path|meta|http\\s+equiv|name|user\\s+agent)\\b"
+        },
+        {
+          "name": "keyword.operator.typeof.wmlscript",
+          "match": "\\b(typeof|isvalid)\\b"
+        }
+      ]
+    },
+    "function-declaration": {
+      "name": "meta.function.wmlscript",
+      "begin": "\\b(extern\\s+)?function\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\(",
+      "beginCaptures": {
+        "1": { "name": "storage.modifier.wmlscript" },
+        "2": { "name": "entity.name.function.wmlscript" }
+      },
+      "end": "\\)",
+      "patterns": [
+        {
+          "name": "variable.parameter.wmlscript",
+          "match": "[a-zA-Z_][a-zA-Z0-9_]*"
+        },
+        {
+          "name": "punctuation.separator.parameter.wmlscript",
+          "match": ","
+        }
+      ]
+    },
+    "stdlib": {
+      "patterns": [
+        {
+          "name": "support.class.wmlscript",
+          "match": "\\b(Lang|Float|String|URL|WMLBrowser|Dialogs|Console)\\b"
+        },
+        {
+          "name": "support.function.lang.wmlscript",
+          "match": "\\b(Lang)\\.(abs|min|max|parseInt|parseFloat|isInt|isFloat|maxInt|minInt|float|exit|abort|random|seed|characterSet)\\b",
+          "captures": {
+            "1": { "name": "support.class.wmlscript" },
+            "2": { "name": "support.function.wmlscript" }
+          }
+        },
+        {
+          "name": "support.function.float.wmlscript",
+          "match": "\\b(Float)\\.(int|floor|ceil|pow|round|sqrt|maxFloat|minFloat)\\b",
+          "captures": {
+            "1": { "name": "support.class.wmlscript" },
+            "2": { "name": "support.function.wmlscript" }
+          }
+        },
+        {
+          "name": "support.function.string.wmlscript",
+          "match": "\\b(String)\\.(length|isEmpty|charAt|subString|find|replace|elements|elementAt|removeAt|replaceAt|insertAt|squeeze|trim|compare|toString|format)\\b",
+          "captures": {
+            "1": { "name": "support.class.wmlscript" },
+            "2": { "name": "support.function.wmlscript" }
+          }
+        },
+        {
+          "name": "support.function.url.wmlscript",
+          "match": "\\b(URL)\\.(isValid|getScheme|getHost|getPort|getPath|getParameters|getQuery|getFragment|getBase|getReferer|resolve|escapeString|unescapeString|loadString)\\b",
+          "captures": {
+            "1": { "name": "support.class.wmlscript" },
+            "2": { "name": "support.function.wmlscript" }
+          }
+        },
+        {
+          "name": "support.function.wmlbrowser.wmlscript",
+          "match": "\\b(WMLBrowser)\\.(getVar|setVar|go|prev|newContext|getCurrentCard|refresh)\\b",
+          "captures": {
+            "1": { "name": "support.class.wmlscript" },
+            "2": { "name": "support.function.wmlscript" }
+          }
+        },
+        {
+          "name": "support.function.dialogs.wmlscript",
+          "match": "\\b(Dialogs)\\.(prompt|confirm|alert)\\b",
+          "captures": {
+            "1": { "name": "support.class.wmlscript" },
+            "2": { "name": "support.function.wmlscript" }
+          }
+        },
+        {
+          "name": "support.function.console.wmlscript",
+          "match": "\\b(Console)\\.(print|println)\\b",
+          "captures": {
+            "1": { "name": "support.class.wmlscript" },
+            "2": { "name": "support.function.wmlscript" }
+          }
+        }
+      ]
+    },
+    "constant": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.wmlscript",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "constant.language.invalid.wmlscript",
+          "match": "\\b(invalid)\\b"
+        }
+      ]
+    },
+    "operator": {
+      "patterns": [
+        {
+          "name": "keyword.operator.assignment.wmlscript",
+          "match": "(=|\\+=|-=|\\*=|/=|%=|<<=|>>=|>>>=|&=|\\^=|\\|=)"
+        },
+        {
+          "name": "keyword.operator.comparison.wmlscript",
+          "match": "(==|!=|<=|>=|<|>)"
+        },
+        {
+          "name": "keyword.operator.logical.wmlscript",
+          "match": "(&&|\\|\\||!)"
+        },
+        {
+          "name": "keyword.operator.arithmetic.wmlscript",
+          "match": "(\\+|-|\\*|/|%|\\+\\+|--)"
+        },
+        {
+          "name": "keyword.operator.bitwise.wmlscript",
+          "match": "(&|\\||\\^|~|<<|>>|>>>)"
+        },
+        {
+          "name": "keyword.operator.ternary.wmlscript",
+          "match": "(\\?|:)"
+        }
+      ]
+    },
+    "variable": {
+      "name": "variable.other.wmlscript",
+      "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.terminator.wmlscript",
+          "match": ";"
+        },
+        {
+          "name": "punctuation.separator.wmlscript",
+          "match": ","
+        },
+        {
+          "name": "punctuation.section.block.begin.wmlscript",
+          "match": "\\{"
+        },
+        {
+          "name": "punctuation.section.block.end.wmlscript",
+          "match": "\\}"
+        },
+        {
+          "name": "punctuation.section.parens.begin.wmlscript",
+          "match": "\\("
+        },
+        {
+          "name": "punctuation.section.parens.end.wmlscript",
+          "match": "\\)"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,411 @@
+{
+  "WML Document": {
+    "prefix": "wml",
+    "body": [
+      "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
+      "<!DOCTYPE wml PUBLIC \"-//WAPFORUM//DTD WML 1.3//EN\"",
+      "  \"http://www.wapforum.org/DTD/wml13.dtd\">",
+      "",
+      "<wml>",
+      "  <card id=\"${1:main}\" title=\"${2:Title}\">",
+      "    <p>",
+      "      $0",
+      "    </p>",
+      "  </card>",
+      "</wml>"
+    ],
+    "description": "WML 1.3 document template"
+  },
+  "WML Document with WCSS": {
+    "prefix": "wml-css",
+    "body": [
+      "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
+      "<!DOCTYPE wml PUBLIC \"-//WAPFORUM//DTD WML 1.3//EN\"",
+      "  \"http://www.wapforum.org/DTD/wml13.dtd\">",
+      "<?xml-stylesheet type=\"text/css\" href=\"${1:styles.css}\"?>",
+      "",
+      "<wml>",
+      "  <card id=\"${2:main}\" title=\"${3:Title}\">",
+      "    <p>",
+      "      $0",
+      "    </p>",
+      "  </card>",
+      "</wml>"
+    ],
+    "description": "WML document with WCSS stylesheet"
+  },
+  "Card": {
+    "prefix": "card",
+    "body": [
+      "<card id=\"${1:cardId}\" title=\"${2:Title}\">",
+      "  <p>",
+      "    $0",
+      "  </p>",
+      "</card>"
+    ],
+    "description": "WML card element"
+  },
+  "Card with Events": {
+    "prefix": "card-event",
+    "body": [
+      "<card id=\"${1:cardId}\" title=\"${2:Title}\">",
+      "  <onevent type=\"${3|onenterforward,onenterbackward,ontimer|}\">",
+      "    <go href=\"${4:#target}\"/>",
+      "  </onevent>",
+      "  <p>",
+      "    $0",
+      "  </p>",
+      "</card>"
+    ],
+    "description": "WML card with onevent"
+  },
+  "Card with Timer": {
+    "prefix": "card-timer",
+    "body": [
+      "<card id=\"${1:cardId}\" title=\"${2:Title}\" ontimer=\"${3:#next}\">",
+      "  <timer value=\"${4:30}\"/>",
+      "  <p>",
+      "    $0",
+      "  </p>",
+      "</card>"
+    ],
+    "description": "WML card with timer"
+  },
+  "Head": {
+    "prefix": "head",
+    "body": [
+      "<head>",
+      "  <access domain=\"${1:example.com}\" path=\"${2:/}\"/>",
+      "  <meta http-equiv=\"${3:Cache-Control}\" content=\"${4:max-age=300}\" forua=\"true\"/>",
+      "</head>"
+    ],
+    "description": "WML head element with access and meta"
+  },
+  "Template": {
+    "prefix": "template",
+    "body": [
+      "<template>",
+      "  <do type=\"${1|options,accept,prev,help,reset,delete|}\" label=\"${2:Label}\">",
+      "    <go href=\"${3:#target}\"/>",
+      "  </do>",
+      "</template>"
+    ],
+    "description": "WML deck-level template"
+  },
+  "Paragraph": {
+    "prefix": "p",
+    "body": [
+      "<p${1: align=\"${2|left,center,right|}\"}${3: class=\"${4:className}\"}>",
+      "  $0",
+      "</p>"
+    ],
+    "description": "WML paragraph"
+  },
+  "Do Accept": {
+    "prefix": "do-accept",
+    "body": [
+      "<do type=\"accept\" label=\"${1:OK}\">",
+      "  <go href=\"${2:#target}\"/>",
+      "</do>"
+    ],
+    "description": "Do element with accept type"
+  },
+  "Do Prev": {
+    "prefix": "do-prev",
+    "body": [
+      "<do type=\"prev\" label=\"${1:Back}\">",
+      "  <prev/>",
+      "</do>"
+    ],
+    "description": "Do element with prev task"
+  },
+  "Do Options": {
+    "prefix": "do-options",
+    "body": [
+      "<do type=\"options\" label=\"${1:Menu}\" name=\"${2:menuName}\">",
+      "  <go href=\"${3:#menu}\"/>",
+      "</do>"
+    ],
+    "description": "Do element with options type"
+  },
+  "Go Task": {
+    "prefix": "go",
+    "body": [
+      "<go href=\"${1:url}\" method=\"${2|get,post|}\"${3: sendreferer=\"true\"}>",
+      "  ${4:<postfield name=\"${5:key}\" value=\"${6:\\$value}\"/>}",
+      "</go>"
+    ],
+    "description": "Go task element"
+  },
+  "Go with Postfields": {
+    "prefix": "go-post",
+    "body": [
+      "<go href=\"${1:url}\" method=\"post\">",
+      "  <postfield name=\"${2:name}\" value=\"\\$(${3:var}:escape)\"/>",
+      "  $0",
+      "</go>"
+    ],
+    "description": "Go task with POST method and postfields"
+  },
+  "Anchor": {
+    "prefix": "anchor",
+    "body": [
+      "<anchor${1: accesskey=\"${2:1}\"}${3: title=\"${4:Title}\"}>",
+      "  ${5:Link Text}",
+      "  <go href=\"${6:#target}\"/>",
+      "</anchor>"
+    ],
+    "description": "Anchor element"
+  },
+  "Link (a)": {
+    "prefix": "a",
+    "body": [
+      "<a href=\"${1:#target}\"${2: accesskey=\"${3:1}\"}>${4:Link Text}</a>"
+    ],
+    "description": "WML hyperlink"
+  },
+  "Input Text": {
+    "prefix": "input",
+    "body": [
+      "<input name=\"${1:fieldName}\" type=\"${2|text,password|}\" title=\"${3:Label}\"",
+      "       maxlength=\"${4:30}\"${5: format=\"${6:*M}\"}${7: tabindex=\"${8:1}\"}${9: accesskey=\"${10:1}\"}/>"
+    ],
+    "description": "Input text field"
+  },
+  "Select Single": {
+    "prefix": "select",
+    "body": [
+      "<select name=\"${1:selectName}\"${2: value=\"${3:default}\"}>",
+      "  <option value=\"${4:val1}\">${5:Option 1}</option>",
+      "  <option value=\"${6:val2}\">${7:Option 2}</option>",
+      "  <option value=\"${8:val3}\">${9:Option 3}</option>",
+      "</select>"
+    ],
+    "description": "Single-choice select list"
+  },
+  "Select Multiple": {
+    "prefix": "select-multi",
+    "body": [
+      "<select name=\"${1:selectName}\" multiple=\"true\">",
+      "  <option value=\"${2:val1}\">${3:Option 1}</option>",
+      "  <option value=\"${4:val2}\">${5:Option 2}</option>",
+      "  <option value=\"${6:val3}\">${7:Option 3}</option>",
+      "</select>"
+    ],
+    "description": "Multiple-choice select list"
+  },
+  "Option Group": {
+    "prefix": "optgroup",
+    "body": [
+      "<optgroup title=\"${1:Group}\">",
+      "  <option value=\"${2:val1}\">${3:Option 1}</option>",
+      "  <option value=\"${4:val2}\">${5:Option 2}</option>",
+      "</optgroup>"
+    ],
+    "description": "Option group"
+  },
+  "Table": {
+    "prefix": "table",
+    "body": [
+      "<table columns=\"${1:2}\"${2: align=\"${3:LL}\"}${4: title=\"${5:Table}\"}>",
+      "  <tr>",
+      "    <td>${6:Header 1}</td>",
+      "    <td>${7:Header 2}</td>",
+      "  </tr>",
+      "  <tr>",
+      "    <td>${8:Cell 1}</td>",
+      "    <td>${9:Cell 2}</td>",
+      "  </tr>",
+      "  $0",
+      "</table>"
+    ],
+    "description": "WML table"
+  },
+  "Table Row": {
+    "prefix": "tr",
+    "body": [
+      "<tr>",
+      "  <td>${1:Cell}</td>",
+      "  <td>${2:Cell}</td>",
+      "</tr>"
+    ],
+    "description": "Table row"
+  },
+  "Image": {
+    "prefix": "img",
+    "body": [
+      "<img src=\"${1:image.wbmp}\" alt=\"${2:[Image]}\"${3: height=\"${4:32}\" width=\"${5:32}\"}/>"
+    ],
+    "description": "Image element"
+  },
+  "Timer": {
+    "prefix": "timer",
+    "body": [
+      "<timer value=\"${1:30}\"/>"
+    ],
+    "description": "Timer element (value in 1/10 seconds)"
+  },
+  "Onevent": {
+    "prefix": "onevent",
+    "body": [
+      "<onevent type=\"${1|onenterforward,onenterbackward,ontimer,onpick|}\">",
+      "  <go href=\"${2:#target}\"/>",
+      "</onevent>"
+    ],
+    "description": "Onevent element"
+  },
+  "Setvar": {
+    "prefix": "setvar",
+    "body": [
+      "<setvar name=\"${1:varName}\" value=\"${2:value}\"/>"
+    ],
+    "description": "Set variable"
+  },
+  "Refresh with Setvar": {
+    "prefix": "refresh",
+    "body": [
+      "<refresh>",
+      "  <setvar name=\"${1:varName}\" value=\"${2:value}\"/>",
+      "  $0",
+      "</refresh>"
+    ],
+    "description": "Refresh task with setvar"
+  },
+  "Noop": {
+    "prefix": "noop",
+    "body": [
+      "<noop/>"
+    ],
+    "description": "No-operation task"
+  },
+  "Fieldset": {
+    "prefix": "fieldset",
+    "body": [
+      "<fieldset title=\"${1:Section}\">",
+      "  $0",
+      "</fieldset>"
+    ],
+    "description": "Fieldset"
+  },
+  "Meta": {
+    "prefix": "meta",
+    "body": [
+      "<meta http-equiv=\"${1|Cache-Control,Content-Type,Expires|}\" content=\"${2:value}\" forua=\"${3|true,false|}\"/>"
+    ],
+    "description": "Meta element"
+  },
+  "Access Control": {
+    "prefix": "access",
+    "body": [
+      "<access domain=\"${1:example.com}\" path=\"${2:/}\"/>"
+    ],
+    "description": "Access control element"
+  },
+  "Postfield": {
+    "prefix": "postfield",
+    "body": [
+      "<postfield name=\"${1:name}\" value=\"\\$(${2:var}:escape)\"/>"
+    ],
+    "description": "Form postfield"
+  },
+  "Variable Reference": {
+    "prefix": "$var",
+    "body": [
+      "\\$(${1:varName}${2::${3|escape,noesc,unesc|}})"
+    ],
+    "description": "WML variable reference with optional escaping"
+  },
+  "Preformatted Text": {
+    "prefix": "pre",
+    "body": [
+      "<pre>",
+      "$0",
+      "</pre>"
+    ],
+    "description": "Preformatted text block"
+  },
+  "Bold": {
+    "prefix": "b",
+    "body": [
+      "<b>${1:text}</b>"
+    ],
+    "description": "Bold text"
+  },
+  "Strong": {
+    "prefix": "strong",
+    "body": [
+      "<strong>${1:text}</strong>"
+    ],
+    "description": "Strong emphasis"
+  },
+  "Emphasis": {
+    "prefix": "em",
+    "body": [
+      "<em>${1:text}</em>"
+    ],
+    "description": "Emphasis"
+  },
+  "Big": {
+    "prefix": "big",
+    "body": [
+      "<big>${1:text}</big>"
+    ],
+    "description": "Big text"
+  },
+  "Small": {
+    "prefix": "small",
+    "body": [
+      "<small>${1:text}</small>"
+    ],
+    "description": "Small text"
+  },
+  "WMLScript Call": {
+    "prefix": "wmls-call",
+    "body": [
+      "<go href=\"${1:script.wmls}#${2:functionName}(${3:'\\$(param)'})\"/>"
+    ],
+    "description": "Call a WMLScript function"
+  },
+  "Login Form": {
+    "prefix": "wml-login",
+    "body": [
+      "<card id=\"login\" title=\"Login\" ordered=\"true\">",
+      "  <p>",
+      "    <do type=\"accept\" label=\"Login\">",
+      "      <go href=\"${1:auth_url}\" method=\"post\">",
+      "        <postfield name=\"user\" value=\"\\$(username:escape)\"/>",
+      "        <postfield name=\"pass\" value=\"\\$(password:escape)\"/>",
+      "      </go>",
+      "    </do>",
+      "    Username:",
+      "    <input name=\"username\" type=\"text\" maxlength=\"20\"/><br/>",
+      "    Password:",
+      "    <input name=\"password\" type=\"password\" maxlength=\"30\"/>",
+      "  </p>",
+      "</card>"
+    ],
+    "description": "Login form card"
+  },
+  "Menu Card": {
+    "prefix": "wml-menu",
+    "body": [
+      "<card id=\"menu\" title=\"Menu\">",
+      "  <p>",
+      "    <anchor accesskey=\"1\">",
+      "      1. ${1:Item 1}",
+      "      <go href=\"${2:#card1}\"/>",
+      "    </anchor><br/>",
+      "    <anchor accesskey=\"2\">",
+      "      2. ${3:Item 2}",
+      "      <go href=\"${4:#card2}\"/>",
+      "    </anchor><br/>",
+      "    <anchor accesskey=\"3\">",
+      "      3. ${5:Item 3}",
+      "      <go href=\"${6:#card3}\"/>",
+      "    </anchor><br/>",
+      "  </p>",
+      "</card>"
+    ],
+    "description": "Menu card with numbered items"
+  }
+}

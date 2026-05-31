@@ -1,0 +1,33 @@
+{
+    "scopeName": "source.wmlsc-disasm",
+    "name": "WMLSC Disassembly",
+    "patterns": [
+        { "include": "#comment-section" },
+        { "include": "#comment-line" },
+        { "include": "#instruction-line" }
+    ],
+    "repository": {
+        "comment-section": {
+            "match": "^(;\\s*===.+===)$",
+            "captures": {
+                "1": { "name": "markup.heading.wmlsc-disasm" }
+            }
+        },
+        "comment-line": {
+            "match": "^(;.*)$",
+            "captures": {
+                "1": { "name": "comment.line.semicolon.wmlsc-disasm" }
+            }
+        },
+        "instruction-line": {
+            "match": "^\\s+(\\d{4})\\s+((?:[0-9a-f]{2}\\s?)+)\\s+((?:JUMP_FW|JUMP_FW_W|JUMP_BW|JUMP_BW_W|JUMP_BW_S|JUMP_FW_S|TJUMP_FW|TJUMP_FW_W|TJUMP_BW|TJUMP_BW_W|TJUMP_FW_S|CALL|CALL_S|CALL_LIB|CALL_LIB_S|CALL_LIB_W|CALL_URL|CALL_URL_W|LOAD_VAR|LOAD_VAR_S|STORE_VAR|STORE_VAR_S|INCR_VAR|INCR_VAR_S|DECR_VAR|LOAD_CONST|LOAD_CONST_S|LOAD_CONST_W|CONST_0|CONST_1|CONST_M1|CONST_ES|CONST_INVALID|CONST_TRUE|CONST_FALSE|INCR|DECR|ADD_ASG|SUB_ASG|UMINUS|ADD|SUB|MUL|DIV|IDIV|REM|B_AND|B_OR|B_XOR|B_NOT|B_LSHIFT|B_RSSHIFT|B_RSZSHIFT|EQ|LE|LT|GE|GT|NE|NOT|SCAND|SCOR|TOBOOL|POP|TYPEOF|ISVALID|RETURN|RETURN_ES|DEBUG)\\b)(.*?)(?:\\s+(;.*))?$",
+            "captures": {
+                "1": { "name": "constant.numeric.address.wmlsc-disasm" },
+                "2": { "name": "string.other.hexbytes.wmlsc-disasm" },
+                "3": { "name": "keyword.operator.instruction.wmlsc-disasm" },
+                "4": { "name": "variable.parameter.operand.wmlsc-disasm" },
+                "5": { "name": "comment.line.semicolon.wmlsc-disasm" }
+            }
+        }
+    }
+}

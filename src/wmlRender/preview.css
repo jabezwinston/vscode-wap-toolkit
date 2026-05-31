@@ -1,0 +1,43 @@
+/* WML Preview — Styles (preview-specific; shared styles in ../shared/wml-elements.css) */
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #2d2d2d;
+    color: #fff;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+}
+
+/* ── Preview Toolbar ─────────────────────────────────────── */
+
+.preview-toolbar {
+    width: 100%;
+    background: #1e1e1e;
+    padding: 8px 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #444;
+}
+.toolbar-title { font-weight: bold; color: #4fc3f7; }
+.toolbar-info { color: #888; font-size: 0.85em; }
+
+/* ── Preview Phone Frame Override ────────────────────────── */
+
+.wap-phone-frame { margin: 20px auto; }
+
+/* ── No-frame Mode ───────────────────────────────────────── */
+
+.wml-content {
+    margin: 20px auto;
+    max-width: 400px;
+    background: #1a1a2e;
+    color: #eee;
+    padding: 16px;
+    border-radius: 8px;
+    font-family: 'Courier New', monospace;
+    font-size: 13px;
+}

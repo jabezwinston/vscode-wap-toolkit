@@ -1,0 +1,178 @@
+{
+  "WMLScript Function": {
+    "prefix": "func",
+    "body": [
+      "function ${1:name}(${2:params}) {",
+      "  $0",
+      "};"
+    ],
+    "description": "WMLScript function"
+  },
+  "WMLScript Extern Function": {
+    "prefix": "extern",
+    "body": [
+      "extern function ${1:name}(${2:params}) {",
+      "  $0",
+      "};"
+    ],
+    "description": "WMLScript extern function"
+  },
+  "Variable Declaration": {
+    "prefix": "var",
+    "body": [
+      "var ${1:name} = ${2:value};"
+    ],
+    "description": "Variable declaration"
+  },
+  "If Statement": {
+    "prefix": "if",
+    "body": [
+      "if (${1:condition}) {",
+      "  $0",
+      "}"
+    ],
+    "description": "If statement"
+  },
+  "If-Else": {
+    "prefix": "ife",
+    "body": [
+      "if (${1:condition}) {",
+      "  $2",
+      "} else {",
+      "  $0",
+      "}"
+    ],
+    "description": "If-else statement"
+  },
+  "While Loop": {
+    "prefix": "while",
+    "body": [
+      "while (${1:condition}) {",
+      "  $0",
+      "}"
+    ],
+    "description": "While loop"
+  },
+  "For Loop": {
+    "prefix": "for",
+    "body": [
+      "for (var ${1:i} = ${2:0}; ${1:i} < ${3:count}; ${1:i} = ${1:i} + 1) {",
+      "  $0",
+      "}"
+    ],
+    "description": "For loop"
+  },
+  "WMLBrowser.setVar": {
+    "prefix": "setvar",
+    "body": [
+      "WMLBrowser.setVar(\"${1:name}\", ${2:value});"
+    ],
+    "description": "Set WML browser variable"
+  },
+  "WMLBrowser.getVar": {
+    "prefix": "getvar",
+    "body": [
+      "WMLBrowser.getVar(\"${1:name}\")"
+    ],
+    "description": "Get WML browser variable"
+  },
+  "WMLBrowser.refresh": {
+    "prefix": "refresh",
+    "body": [
+      "WMLBrowser.refresh();"
+    ],
+    "description": "Refresh WML browser"
+  },
+  "WMLBrowser.go": {
+    "prefix": "go",
+    "body": [
+      "WMLBrowser.go(\"${1:url}\");"
+    ],
+    "description": "Navigate to URL"
+  },
+  "Dialogs.alert": {
+    "prefix": "alert",
+    "body": [
+      "Dialogs.alert(${1:\"message\"});"
+    ],
+    "description": "Show alert dialog"
+  },
+  "Dialogs.confirm": {
+    "prefix": "confirm",
+    "body": [
+      "var ${1:ok} = Dialogs.confirm(${2:\"Question?\"}, ${3:\"Yes\"}, ${4:\"No\"});"
+    ],
+    "description": "Show confirm dialog"
+  },
+  "Dialogs.prompt": {
+    "prefix": "prompt",
+    "body": [
+      "var ${1:input} = Dialogs.prompt(${2:\"Enter value:\"}, ${3:\"\"});"
+    ],
+    "description": "Show prompt dialog"
+  },
+  "Lang.parseFloat": {
+    "prefix": "parsefloat",
+    "body": [
+      "Lang.parseFloat(${1:value})"
+    ],
+    "description": "Parse string to float"
+  },
+  "Lang.parseInt": {
+    "prefix": "parseint",
+    "body": [
+      "Lang.parseInt(${1:value})"
+    ],
+    "description": "Parse string to integer"
+  },
+  "String.length": {
+    "prefix": "strlen",
+    "body": [
+      "String.length(${1:str})"
+    ],
+    "description": "Get string length"
+  },
+  "String.find": {
+    "prefix": "strfind",
+    "body": [
+      "String.find(${1:str}, ${2:substr})"
+    ],
+    "description": "Find substring"
+  },
+  "String.substring": {
+    "prefix": "substr",
+    "body": [
+      "String.subString(${1:str}, ${2:start}, ${3:length})"
+    ],
+    "description": "Get substring"
+  },
+  "Float.sqrt": {
+    "prefix": "sqrt",
+    "body": [
+      "Float.sqrt(${1:value})"
+    ],
+    "description": "Square root"
+  },
+  "Float.round": {
+    "prefix": "round",
+    "body": [
+      "Float.round(${1:value})"
+    ],
+    "description": "Round to nearest integer"
+  },
+  "URL.loadString": {
+    "prefix": "loadstr",
+    "body": [
+      "URL.loadString(${1:url}, ${2:\"text/plain\"})"
+    ],
+    "description": "Load content from URL"
+  },
+  "Set Var and Refresh Pattern": {
+    "prefix": "setrefresh",
+    "body": [
+      "WMLBrowser.setVar(\"${1:name}\", ${2:value});",
+      "WMLBrowser.refresh();"
+    ],
+    "description": "Set variable and refresh browser"
+  }
+}

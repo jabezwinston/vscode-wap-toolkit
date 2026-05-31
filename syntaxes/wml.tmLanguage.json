@@ -1,0 +1,213 @@
+{
+  "name": "WML (Wireless Markup Language)",
+  "scopeName": "text.xml.wml",
+  "fileTypes": ["wml"],
+  "patterns": [
+    { "include": "#xml-processing-instruction" },
+    { "include": "#doctype" },
+    { "include": "#comment" },
+    { "include": "#cdata" },
+    { "include": "#wml-variable" },
+    { "include": "#entity" },
+    { "include": "#tag" }
+  ],
+  "repository": {
+    "xml-processing-instruction": {
+      "name": "meta.tag.preprocessor.xml.wml",
+      "begin": "(<\\?)(xml|xml-stylesheet)",
+      "beginCaptures": {
+        "1": { "name": "punctuation.definition.tag.begin.xml.wml" },
+        "2": { "name": "entity.name.tag.xml.wml" }
+      },
+      "end": "(\\?>)",
+      "endCaptures": {
+        "1": { "name": "punctuation.definition.tag.end.xml.wml" }
+      },
+      "patterns": [
+        { "include": "#tag-attribute" }
+      ]
+    },
+    "doctype": {
+      "name": "meta.tag.sgml.doctype.wml",
+      "begin": "(<!)(DOCTYPE)",
+      "beginCaptures": {
+        "1": { "name": "punctuation.definition.tag.begin.wml" },
+        "2": { "name": "keyword.other.doctype.wml" }
+      },
+      "end": "(>)",
+      "endCaptures": {
+        "1": { "name": "punctuation.definition.tag.end.wml" }
+      },
+      "patterns": [
+        {
+          "name": "variable.language.documentroot.wml",
+          "match": "\\bwml\\b"
+        },
+        {
+          "name": "keyword.other.doctype.wml",
+          "match": "\\b(PUBLIC|SYSTEM)\\b"
+        },
+        {
+          "name": "string.quoted.double.doctype.wml",
+          "begin": "\"",
+          "end": "\""
+        }
+      ]
+    },
+    "comment": {
+      "name": "comment.block.wml",
+      "begin": "<!--",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.comment.begin.wml" }
+      },
+      "end": "-->",
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.comment.end.wml" }
+      }
+    },
+    "cdata": {
+      "name": "string.unquoted.cdata.wml",
+      "begin": "<!\\[CDATA\\[",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.string.begin.wml" }
+      },
+      "end": "\\]\\]>",
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.string.end.wml" }
+      }
+    },
+    "wml-variable": {
+      "patterns": [
+        {
+          "name": "constant.character.escape.dollar.wml",
+          "match": "\\$\\$"
+        },
+        {
+          "name": "variable.other.wml",
+          "match": "\\$(\\()([A-Za-z_][A-Za-z0-9_]*)(:(escape|noesc|unesc))?(\\))",
+          "captures": {
+            "1": { "name": "punctuation.definition.variable.begin.wml" },
+            "2": { "name": "variable.other.wml" },
+            "3": { "name": "keyword.operator.escape.wml" },
+            "5": { "name": "punctuation.definition.variable.end.wml" }
+          }
+        },
+        {
+          "name": "variable.other.wml",
+          "match": "\\$([A-Za-z_][A-Za-z0-9_]*)"
+        }
+      ]
+    },
+    "entity": {
+      "patterns": [
+        {
+          "name": "constant.character.entity.named.wml",
+          "match": "&(amp|lt|gt|quot|apos|nbsp|shy);"
+        },
+        {
+          "name": "constant.character.entity.numeric.decimal.wml",
+          "match": "&#[0-9]+;"
+        },
+        {
+          "name": "constant.character.entity.numeric.hex.wml",
+          "match": "&#x[0-9a-fA-F]+;"
+        }
+      ]
+    },
+    "tag": {
+      "patterns": [
+        { "include": "#self-closing-tag" },
+        { "include": "#open-tag" },
+        { "include": "#close-tag" }
+      ]
+    },
+    "self-closing-tag": {
+      "name": "meta.tag.self-closing.wml",
+      "begin": "(<)(access|br|go|img|input|meta|noop|onevent|postfield|prev|refresh|setvar|timer)(?=[\\s/>])",
+      "beginCaptures": {
+        "1": { "name": "punctuation.definition.tag.begin.wml" },
+        "2": { "name": "entity.name.tag.wml" }
+      },
+      "end": "(/?>)",
+      "endCaptures": {
+        "1": { "name": "punctuation.definition.tag.end.wml" }
+      },
+      "patterns": [
+        { "include": "#tag-attribute" }
+      ]
+    },
+    "open-tag": {
+      "name": "meta.tag.open.wml",
+      "begin": "(<)(wml|card|head|template|access|anchor|a|b|big|br|do|em|fieldset|go|head|i|img|input|meta|noop|onevent|optgroup|option|p|postfield|pre|prev|refresh|select|setvar|small|strong|table|td|timer|tr|u)(?=[\\s>])",
+      "beginCaptures": {
+        "1": { "name": "punctuation.definition.tag.begin.wml" },
+        "2": { "name": "entity.name.tag.wml" }
+      },
+      "end": "(>)",
+      "endCaptures": {
+        "1": { "name": "punctuation.definition.tag.end.wml" }
+      },
+      "patterns": [
+        { "include": "#tag-attribute" }
+      ]
+    },
+    "close-tag": {
+      "name": "meta.tag.close.wml",
+      "begin": "(</)(wml|card|head|template|anchor|a|b|big|do|em|fieldset|go|i|img|input|meta|onevent|optgroup|option|p|postfield|pre|prev|refresh|select|setvar|small|strong|table|td|timer|tr|u)(?=[\\s>])",
+      "beginCaptures": {
+        "1": { "name": "punctuation.definition.tag.begin.wml" },
+        "2": { "name": "entity.name.tag.wml" }
+      },
+      "end": "(>)",
+      "endCaptures": {
+        "1": { "name": "punctuation.definition.tag.end.wml" }
+      }
+    },
+    "tag-attribute": {
+      "patterns": [
+        {
+          "name": "meta.attribute.wml",
+          "match": "\\b(id|class|title|name|value|type|href|label|method|sendreferer|cache-control|accept-charset|newcontext|ordered|domain|path|forua|http-equiv|content|scheme|columns|align|src|alt|height|width|localsrc|vspace|hspace|maxlength|size|format|emptyok|tabindex|accesskey|multiple|iname|ivalue|onpick|onenterforward|onenterbackward|ontimer|xml:lang|mode|optional)(\\s*=\\s*)",
+          "captures": {
+            "1": { "name": "entity.other.attribute-name.wml" },
+            "2": { "name": "punctuation.separator.key-value.wml" }
+          }
+        },
+        {
+          "name": "entity.other.attribute-name.wml",
+          "match": "\\b[a-zA-Z_:][a-zA-Z0-9_.:-]*\\b(?=\\s*=)"
+        },
+        {
+          "name": "string.quoted.double.wml",
+          "begin": "\"",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.wml" }
+          },
+          "end": "\"",
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.string.end.wml" }
+          },
+          "patterns": [
+            { "include": "#wml-variable" },
+            { "include": "#entity" }
+          ]
+        },
+        {
+          "name": "string.quoted.single.wml",
+          "begin": "'",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.wml" }
+          },
+          "end": "'",
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.string.end.wml" }
+          },
+          "patterns": [
+            { "include": "#wml-variable" },
+            { "include": "#entity" }
+          ]
+        }
+      ]
+    }
+  }
+}
