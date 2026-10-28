@@ -362,7 +362,7 @@ export function decodeMbUint32(data: Buffer | Uint8Array, offset: number): { val
     let byte: number;
     do {
         byte = data[pos++];
-        value = (value << 7) | (byte & 0x7F);
+        value = value * 128 + (byte & 0x7F);   // not `<<`: 32-bit signed in JS
     } while ((byte & 0x80) !== 0 && pos < data.length);
     return { value, bytesRead: pos - offset };
 }

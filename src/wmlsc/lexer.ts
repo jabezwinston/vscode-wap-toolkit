@@ -400,8 +400,9 @@ export class Lexer {
                         break;
                     }
                     case 'u': {
-                        // Unicode escape \uNNNN
-                        // WAP-193: only ASCII values (< 128) are supported; non-ASCII → '?'
+                        // Unicode escape \uNNNN: any Unicode character (WAP-193 §7:
+                        // "any Unicode character may also be expressed as a
+                        // Unicode escape sequence")
                         let hex = '';
                         for (let i = 0; i < 4; i++) {
                             this.advance();
@@ -410,7 +411,7 @@ export class Lexer {
                             }
                         }
                         const codePoint = parseInt(hex, 16);
-                        value += codePoint < 128 ? String.fromCharCode(codePoint) : '?';
+                        value += String.fromCharCode(codePoint);
                         break;
                     }
                     default:

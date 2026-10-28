@@ -22,11 +22,12 @@
 - Supports WSP and WAP-over-HTTP protocols
 
 **WAP networking**
-- Minimal WAP server for serving WML, WMLScript, and WBMP files over using below protocols:
+- Minimal WAP server for serving WML, WMLScript, and WBMP files using the protocols below:
   - WSP connectionless (`wap.wspPort`)
   - WSP connection-oriented (`wap.wspCoPort`)
   - WAP-over-HTTP (`wap.httpPort`)
 - Ports can be configured in settings.
+- Listens on `127.0.0.1` by default; set `wap.bindAddress` to `0.0.0.0` to serve devices on your network.
 - Click **Start WAP Server** in the status bar to launch the server.
 
 **Compile & disassemble**

@@ -33,26 +33,45 @@ var wmlVars = {};
 // left untouched. Pass hrefContext=true when substituting into an href/URL.
 // $$ is a literal dollar sign.
 
-// RFC2396 URL-escape, matching the WMLScript URL.escapeString convention:
-// lowercase %xx for every octet outside the unreserved set (WAP WMLScript Std
-// Libs §10.12). Kept in sync with escapeUrlString in src/wmlsc/stdlib.ts and
-// _escapeUrl in src/wmlRender/wmlsRuntime.js so href substitution and
-// URL.escapeString produce identical output. Chars > U+00FF (which the engine
-// helper rejects) degrade to their lowercase UTF-8 octets so non-ASCII decks
-// still render.
+// WML 1.3 §10.3.1 escape conversion: RFC2396 URL-escape, lowercase %xx for
+// every octet outside the unreserved set, of the value encoded in the charset
+// the deck came in (§9.5.1, as the C browser does): wmlCharsetMap maps code
+// points to bytes for a single-byte charset (from the host's deckContent);
+// null means UTF-8.  A character the charset lacks goes as '?' (%3f).
+// (URL.escapeString keeps its own §10.12 rule: the character's code.)
 var URL_UNRESERVED = /[A-Za-z0-9\-_.!~*'()]/;
+var wmlCharsetMap = null;
+function pctByte(b) { return '%' + (b < 16 ? '0' : '') + b.toString(16); }
 function escapeUrlString(val) {
     var out = '';
     for (var i = 0; i < val.length; i++) {
         var ch = val[i], code = val.charCodeAt(i);
         if (URL_UNRESERVED.test(ch)) { out += ch; }
-        else if (code <= 0xFF) { out += '%' + ('0' + code.toString(16)).slice(-2); }
-        else { out += encodeURIComponent(ch).toLowerCase(); }
+        else if (code < 0x80) { out += pctByte(code); }
+        else if (wmlCharsetMap) {
+            var b = wmlCharsetMap[code];
+            out += b !== undefined ? pctByte(b) : '%3f';
+        } else {
+            var pair = code >= 0xD800 && code <= 0xDBFF && i + 1 < val.length;
+            out += encodeURIComponent(pair ? val.substr(i++, 2) : ch).toLowerCase();
+        }
     }
     return out;
 }
+// unesc: percent-decode; bytes that are not UTF-8 are read in the deck's
+// charset (Latin-1 without a map).  A malformed value passes through.
 function unescapeUrlString(val) {
-    try { return decodeURIComponent(val); } catch (e) { return val; }
+    try { return decodeURIComponent(val); } catch (e) { /* not UTF-8 */ }
+    var inv = {};
+    if (wmlCharsetMap) {
+        for (var cp in wmlCharsetMap) {
+            if (wmlCharsetMap.hasOwnProperty(cp)) { inv[wmlCharsetMap[cp]] = +cp; }
+        }
+    }
+    return val.replace(/%([0-9a-fA-F]{2})/g, function(m, h) {
+        var b = parseInt(h, 16);
+        return String.fromCharCode(b < 0x80 || !wmlCharsetMap ? b : (inv[b] || 0x3F));
+    });
 }
 
 function substituteVars(str, hrefContext) {
@@ -104,6 +123,11 @@ function getMethod(el) {
     return (el.getAttribute('data-method') || 'get').toLowerCase();
 }
 
+// The accept-charset of a navigating <go> (WAP-191 §9.5.1), or null
+function getAcceptCharset(el) {
+    return el ? el.getAttribute('data-accept-charset') : null;
+}
+
 // Whether a navigating element requested sendreferer="true" (WAP-191 §9.5.1)
 function getSendreferer(el) {
     return el.getAttribute('data-sendreferer') === 'true';
@@ -129,7 +153,7 @@ function processOnEvent(card, eventType) {
         if (href) {
             var postfields = getPostfields(e);
             var method = getMethod(e);
-            wmlNavigate(href, postfields, method, getSendreferer(e));
+            wmlNavigate(href, postfields, method, getSendreferer(e), getAcceptCharset(e));
         } else if (action === 'refresh') {
             updateVariables();
         } else if (action === 'prev') {
@@ -266,7 +290,8 @@ function triggerAction(action) {
     if (action.href) {
         var postfields = action.el ? getPostfields(action.el) : [];
         var method = action.el ? getMethod(action.el) : 'get';
-        wmlNavigate(action.href, postfields, method, action.el ? getSendreferer(action.el) : false);
+        wmlNavigate(action.href, postfields, method, action.el ? getSendreferer(action.el) : false,
+                    getAcceptCharset(action.el));
     } else if (action.action === 'prev') {
         wmlPrev();
     } else if (action.action === 'refresh') {
@@ -320,11 +345,43 @@ function processTimers(card) {
 
 // ── Variable Display ─────────────────────────────────────────────
 
+/**
+ * Apply a WML variable conversion (WML 1.3 §10.3.1).
+ *
+ *   escape  URL-encode the value      $(x:escape) with x="a b" -> "a%20b"
+ *   unesc   URL-decode the value      $(x:unesc)  with x="a%20b" -> "a b"
+ *   noesc   leave it alone (the default in text content)
+ *
+ * A value that is not valid percent-encoding cannot be decoded; WML has no
+ * error path for that, so it is passed through rather than thrown away.
+ */
+function wmlConvertValue(value, conversion) {
+    if (conversion === 'escape') {
+        return encodeURIComponent(value);
+    }
+    if (conversion === 'unesc') {
+        try { return decodeURIComponent(value); } catch (e) { return value; }
+    }
+    return value;
+}
+
 function updateVariables() {
+    // WML 1.3 §10.3.1: substituting an unset variable yields the empty
+    // string.
+    // wmlTransform emits a "[name]" placeholder for every reference, which is
+    // the right thing for the editor preview — an author wants to see which
+    // variables a deck uses before any are set — and the wrong thing for a
+    // browser, where it puts text on screen that the deck never wrote. A
+    // browser sets WML_STRICT_VARS (see browser.js) to get the spec behaviour;
+    // the preview leaves it unset and keeps its placeholders.
+    var strictVars = typeof window !== 'undefined' && !!window.WML_STRICT_VARS;
     document.querySelectorAll('.wml-var').forEach(function(s) {
         var name = s.getAttribute('data-var');
-        if (name && wmlVars[name] !== undefined) {
-            s.textContent = wmlVars[name];
+        if (!name) { return; }
+        if (wmlVars[name] !== undefined) {
+            s.textContent = wmlConvertValue(wmlVars[name], s.getAttribute('data-conv'));
+        } else if (strictVars) {
+            s.textContent = '';
         }
     });
     // Sync wmlVars back to input fields
@@ -544,7 +601,8 @@ function initWmlEventDelegation() {
             applySetvars(el);
             var postfields = getPostfields(el);
             var method = getMethod(el);
-            wmlNavigate(el.getAttribute('data-href'), postfields, method, getSendreferer(el));
+            wmlNavigate(el.getAttribute('data-href'), postfields, method, getSendreferer(el),
+                        getAcceptCharset(el));
             return;
         }
         var actionEl = e.target.closest('[data-action]');
@@ -586,7 +644,7 @@ function initWmlEventDelegation() {
         if (href) {
             var postfields = getPostfields(el);
             var method = getMethod(el);
-            wmlNavigate(href, postfields, method, getSendreferer(el));
+            wmlNavigate(href, postfields, method, getSendreferer(el), getAcceptCharset(el));
         } else if (action === 'prev') {
             wmlPrev();
         } else if (action === 'refresh') {

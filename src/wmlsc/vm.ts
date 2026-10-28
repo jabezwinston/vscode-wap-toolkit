@@ -222,7 +222,9 @@ export class WmlsVM {
                 const r = this.stepOnce();
                 if (r.done) { return r.value ?? mkString(''); }
             } catch (e) {
-                if (e instanceof DialogSuspend) {
+                // Shape, not prototype: instanceof does not survive an ES5
+                // downlevel of a built-in subclass. See DialogSuspend.is().
+                if (DialogSuspend.is(e)) {
                     const resp = await onDialog(e.request);
                     this.push(coerceDialogResult(e.request, resp));
                     continue;

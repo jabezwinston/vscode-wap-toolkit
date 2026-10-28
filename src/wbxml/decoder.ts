@@ -9,6 +9,7 @@
  *  WBXML Decoder - Converts WBXML binary format back to WML XML
  *  Based on WAP-192-WBXML-20010725 specification
  */
+import { charsetByMib, decodeText } from '../shared/charset';
 import {
     END, STR_I, ENTITY, SWITCH_PAGE,
     EXT_I_0, EXT_I_1, EXT_I_2,
@@ -36,18 +37,33 @@ for (const [key, token] of Object.entries(WML_ATTR_VALUE_TOKENS)) {
     ATTR_VALUE_BY_TOKEN[token] = key;
 }
 
-export function decodeWbxml(data: Buffer): string {
-    const decoder = new WbxmlDecoder(data);
+/**
+ * Decode WBXML to WML text.  Strings are read in the document's charset
+ * (§5.6 charset field), else `externalCharset` (the Content-Type's, §5.2),
+ * else UTF-8.
+ */
+export function decodeWbxml(data: Buffer, externalCharset?: string): string {
+    const decoder = new WbxmlDecoder(data, externalCharset);
     return decoder.decode();
 }
 
 class WbxmlDecoder {
     private data: Buffer;
     private pos: number = 0;
-    private stringTable: string = '';
+    /** String table: byte range in data (entries are byte offsets, §5.7) */
+    private tableStart: number = 0;
+    private tableEnd: number = 0;
+    private charset: string = 'utf-8';
     private indent: number = 0;
+    /**
+     * Current code page of each parser state (WBXML §5.8.1). WML defines its
+     * tokens on page 0 only (WML §14.1.2-3), so tokens of another page are
+     * decoded as unknown ones, never as WML's page-0 tags and attributes.
+     */
+    private tagPage: number = 0;
+    private attrPage: number = 0;
 
-    constructor(data: Buffer) {
+    constructor(data: Buffer, private externalCharset?: string) {
         this.data = data;
     }
 
@@ -61,20 +77,22 @@ class WbxmlDecoder {
             this.readMbUint32(); // string table index
         }
         charset = this.readMbUint32();
+        this.charset = charsetByMib(charset) || this.externalCharset || 'utf-8';
 
         // String table
         const stLen = this.readMbUint32();
-        if (stLen > 0) {
-            this.stringTable = this.data.toString('utf-8', this.pos, this.pos + stLen);
-            this.pos += stLen;
-        }
+        this.tableStart = this.pos;
+        this.tableEnd = Math.min(this.pos + stLen, this.data.length);
+        this.pos += stLen;
 
         // Build XML output
         let xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
         xml += '<!DOCTYPE wml PUBLIC "-//WAPFORUM//DTD WML 1.3//EN"\n';
         xml += '  "http://www.wapforum.org/DTD/wml13.dtd">\n\n';
 
-        xml += this.decodeBody();
+        // decodeTag no longer appends its own trailing newline, so the document
+        // gets one here rather than every element carrying one.
+        xml += this.decodeBody() + '\n';
 
         return xml;
     }
@@ -93,7 +111,7 @@ class WbxmlDecoder {
     private decodeToken(token: number): string {
         switch (token) {
             case SWITCH_PAGE:
-                this.readByte(); // code page
+                this.tagPage = this.readByte();
                 return '';
 
             case END:
@@ -113,13 +131,16 @@ class WbxmlDecoder {
                 return this.entityToString(charCode);
             }
 
+            // WML 1.3 binary: EXT_x_0 = escaped, EXT_x_1 = unescaped,
+            // EXT_x_2 = no transformation. Emit explicit conversions so
+            // the decoded source is unambiguous in any context.
             case EXT_I_0:
             case EXT_I_1:
             case EXT_I_2: {
                 const varName = this.readTerminatedString();
-                if (token === EXT_I_0) { return `$${varName}`; }
+                if (token === EXT_I_0) { return `$(${varName}:escape)`; }
                 if (token === EXT_I_1) { return `$(${varName}:unesc)`; }
-                return `$(${varName}:noesc)`;
+                return `$${varName}`;
             }
 
             case EXT_T_0:
@@ -127,9 +148,9 @@ class WbxmlDecoder {
             case EXT_T_2: {
                 const idx = this.readMbUint32();
                 const name = this.getStringTableEntry(idx);
-                if (token === EXT_T_0) { return `$${name}`; }
+                if (token === EXT_T_0) { return `$(${name}:escape)`; }
                 if (token === EXT_T_1) { return `$(${name}:unesc)`; }
-                return `$(${name}:noesc)`;
+                return `$${name}`;
             }
 
             case EXT_0:
@@ -149,7 +170,7 @@ class WbxmlDecoder {
 
             case OPAQUE: {
                 const len = this.readMbUint32();
-                this.pos += len; // skip opaque data
+                this.pos += len; // skip opaque data (len is never negative)
                 return '';
             }
 
@@ -169,11 +190,16 @@ class WbxmlDecoder {
             const offset = this.readMbUint32();
             tagName = this.getStringTableEntry(offset);
         } else {
-            tagName = WML_TOKEN_TAGS[tagToken] || `unknown_${tagToken.toString(16)}`;
+            tagName = this.tagPage !== 0
+                ? `unknown_p${this.tagPage}_${tagToken.toString(16)}`
+                : WML_TOKEN_TAGS[tagToken] || `unknown_${tagToken.toString(16)}`;
         }
 
+        // No leading indent and no trailing newline: whether this element may be
+        // laid out at all is the *parent's* decision, because only the parent
+        // can see whether its content is mixed. See the content branches below.
         const indentStr = '  '.repeat(this.indent);
-        let result = `${indentStr}<${tagName}`;
+        let result = `<${tagName}`;
 
         // Decode attributes
         if (hasAttrs) {
@@ -183,15 +209,17 @@ class WbxmlDecoder {
         if (hasContent) {
             this.indent++;
 
-            // Collect content parts, merging consecutive inline tokens
-            // (STR_I, ENTITY, variable refs) into single text parts
-            const parts: string[] = [];
-            let hasChildElements = false;
+            // Content parts, keeping consecutive inline tokens (STR_I, ENTITY,
+            // variable refs) merged into one text part. Whether a part is text
+            // or an element is recorded rather than sniffed for '<' afterwards:
+            // escaped text ("&lt;") would fool that, and mixed content has to be
+            // identified exactly.
+            const parts: Array<{ isText: boolean; value: string }> = [];
             let textAccum = '';
 
             const flushText = () => {
                 if (textAccum) {
-                    parts.push(textAccum);
+                    parts.push({ isText: true, value: textAccum });
                     textAccum = '';
                 }
             };
@@ -213,41 +241,50 @@ class WbxmlDecoder {
                     const childToken = this.readByte();
                     const decoded = this.decodeToken(childToken);
                     if (decoded) {
-                        parts.push(decoded);
-                        if (decoded.includes('<')) {
-                            hasChildElements = true;
-                        }
+                        parts.push({ isText: false, value: decoded });
                     }
                 }
             }
             flushText();
 
-            const allContent = parts.join('');
-            const trimmed = allContent.trim();
+            const hasElements = parts.some((p) => !p.isText);
+            const hasText = parts.some((p) => p.isText && p.value.trim() !== '');
+            const childIndent = '  '.repeat(this.indent + 1);
 
-            if (!trimmed) {
-                // Empty content
-                result += `></${tagName}>\n`;
-            } else if (!hasChildElements) {
-                // Text-only content → inline
-                result += `>${trimmed}</${tagName}>\n`;
-            } else {
-                // Has child elements → multi-line
+            if (parts.length === 0 || parts.every((p) => p.isText && !p.value.trim())) {
+                result += `></${tagName}>`;
+            } else if (hasElements && hasText) {
+                /*
+                 * Mixed content. Every character between the tags came off the
+                 * wire and is significant — "&nbsp;<u>fun</u>" renders
+                 * differently from "&nbsp; <u>fun</u>" — so the parts go back
+                 * out exactly as they arrived. Laying this out (a newline and
+                 * an indent per node, each text run trimmed) both invents
+                 * whitespace that was never encoded and drops whitespace that
+                 * was, which changed what the deck rendered purely by being
+                 * transported as WBXML.
+                 */
+                result += '>';
+                for (const part of parts) { result += part.value; }
+                result += `</${tagName}>`;
+            } else if (hasElements) {
+                // Element-only content: no character data to damage, so this
+                // can be laid out for readability. Whitespace-only text parts
+                // are the source's own indentation and are not reproduced.
                 result += '>\n';
-                const childIndent = '  '.repeat(this.indent + 1);
                 for (const part of parts) {
-                    const t = part.trim();
-                    if (t && !t.includes('<')) {
-                        // Text node among elements
-                        result += `${childIndent}${t}\n`;
-                    } else {
-                        result += part;
-                    }
+                    if (part.isText) { continue; }
+                    result += `${childIndent}${part.value}\n`;
                 }
-                result += `${indentStr}</${tagName}>\n`;
+                result += `${indentStr}</${tagName}>`;
+            } else {
+                // Text-only content, verbatim for the same reason as mixed.
+                result += '>';
+                for (const part of parts) { result += part.value; }
+                result += `</${tagName}>`;
             }
         } else {
-            result += '/>\n';
+            result += '/>';
         }
 
         return result;
@@ -276,7 +313,7 @@ class WbxmlDecoder {
             // the attribute-start (0x05-0x7F) and attribute-value (0x80-0xFF)
             // ranges, so they must be matched before the range checks.
             if (token === SWITCH_PAGE) {
-                this.readByte(); // consume code page number
+                this.attrPage = this.readByte();
             } else if (token === STR_I) {
                 currentAttrValue += this.readTerminatedString();
             } else if (token === STR_T) {
@@ -287,13 +324,13 @@ class WbxmlDecoder {
                 currentAttrValue += `&#${charCode};`;
             } else if (token === EXT_I_0 || token === EXT_I_1 || token === EXT_I_2) {
                 const varName = this.readTerminatedString();
-                if (token === EXT_I_0) { currentAttrValue += `$${varName}`; }
+                if (token === EXT_I_0) { currentAttrValue += `$(${varName}:escape)`; }
                 else if (token === EXT_I_1) { currentAttrValue += `$(${varName}:unesc)`; }
                 else { currentAttrValue += `$(${varName}:noesc)`; }
             } else if (token === EXT_T_0 || token === EXT_T_1 || token === EXT_T_2) {
                 const idx = this.readMbUint32();
                 const name = this.getStringTableEntry(idx);
-                if (token === EXT_T_0) { currentAttrValue += `$${name}`; }
+                if (token === EXT_T_0) { currentAttrValue += `$(${name}:escape)`; }
                 else if (token === EXT_T_1) { currentAttrValue += `$(${name}:unesc)`; }
                 else { currentAttrValue += `$(${name}:noesc)`; }
             } else if (token === EXT_0 || token === EXT_1 || token === EXT_2) {
@@ -316,8 +353,11 @@ class WbxmlDecoder {
                     result += ` ${currentAttrName}="${this.escapeXmlAttr(currentAttrValue)}"`;
                 }
 
-                const attrInfo = ATTR_START_BY_TOKEN[token];
-                if (attrInfo) {
+                const attrInfo = this.attrPage === 0 ? ATTR_START_BY_TOKEN[token] : undefined;
+                if (this.attrPage !== 0) {
+                    currentAttrName = `attr_p${this.attrPage}_${token.toString(16)}`;
+                    currentAttrValue = '';
+                } else if (attrInfo) {
                     currentAttrName = attrInfo.name;
                     currentAttrValue = attrInfo.value;
                 } else {
@@ -326,7 +366,7 @@ class WbxmlDecoder {
                 }
             } else if (token >= 0x80 && token <= 0xFF) {
                 // Attribute value token
-                const value = ATTR_VALUE_BY_TOKEN[token];
+                const value = this.attrPage === 0 ? ATTR_VALUE_BY_TOKEN[token] : undefined;
                 if (value) {
                     currentAttrValue += value;
                 }
@@ -358,11 +398,14 @@ class WbxmlDecoder {
     }
 
     private readMbUint32(): number {
+        // Arithmetic, not `<<`: a shift is 32-bit signed in JavaScript, so a
+        // length of 2^31 or more turned negative (an OPAQUE of 0xFFFFFFFA
+        // stepped back onto its own token, for ever)
         let result = 0;
         let byte: number;
         do {
             byte = this.readByte();
-            result = (result << 7) | (byte & 0x7F);
+            result = result * 128 + (byte & 0x7F);
         } while (byte & 0x80);
         return result;
     }
@@ -372,17 +415,16 @@ class WbxmlDecoder {
         while (this.pos < this.data.length && this.data[this.pos] !== 0) {
             this.pos++;
         }
-        const str = this.data.toString('utf-8', start, this.pos);
+        const str = decodeText(this.data, this.charset, start, this.pos);
         this.pos++; // skip null terminator
         return str;
     }
 
     private getStringTableEntry(offset: number): string {
-        const end = this.stringTable.indexOf('\0', offset);
-        if (end === -1) {
-            return this.stringTable.substring(offset);
-        }
-        return this.stringTable.substring(offset, end);
+        const start = this.tableStart + offset;
+        let end = start;
+        while (end < this.tableEnd && this.data[end] !== 0) { end++; }
+        return start < this.tableEnd ? decodeText(this.data, this.charset, start, end) : '';
     }
 
     private static readonly NAMED_ENTITIES: Record<number, string> = {

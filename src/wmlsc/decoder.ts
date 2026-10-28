@@ -11,6 +11,7 @@
  *
  *  Based on WAP-193-WMLScript specification.
  */
+import { charsetByMib, decodeText } from '../shared/charset';
 import {
     Opcode, ConstantType, PragmaType,
     OPCODE_INFO,
@@ -99,8 +100,9 @@ class WmlscDecoder {
 
     private readConstantPool(): WmlscConstant[] {
         const count = this.readMbUint16();
-        // Read CharSet field (WAP-193)
-        const _charset = this.readMbUint32();
+        // CharSet field (WAP-193 §9.1.3): a MIBenum for the type-6 strings,
+        // 0 = unknown (then UTF-8 / ISO-8859-1, as decks with none named)
+        const charset = charsetByMib(this.readMbUint32()) || 'utf-8';
         const constants: WmlscConstant[] = [];
 
         for (let i = 0; i < count; i++) {
@@ -121,8 +123,8 @@ class WmlscDecoder {
                     value = this.readFloat32();
                     break;
                 case ConstantType.UTF8_STRING: {
-                    const len = this.readMbUint32();
-                    value = this.data.toString('utf-8', this.pos, this.pos + len);
+                    const len = this.readSize();
+                    value = decodeText(this.data, 'utf-8', this.pos, this.pos + len);
                     this.pos += len;
                     break;
                 }
@@ -130,9 +132,9 @@ class WmlscDecoder {
                     value = '';
                     break;
                 case ConstantType.EXT_STRING: {
-                    const _charset = this.readMbUint32();
-                    const len = this.readMbUint32();
-                    value = this.data.toString('utf-8', this.pos, this.pos + len);
+                    // §9.4.1.3.3: size and bytes only; the charset is the pool's
+                    const len = this.readSize();
+                    value = decodeText(this.data, charset, this.pos, this.pos + len);
                     this.pos += len;
                     break;
                 }
@@ -185,6 +187,7 @@ class WmlscDecoder {
         for (let i = 0; i < numNames; i++) {
             const funcIndex = this.readUint8();
             const nameSize = this.readUint8();
+            this.checkSize(nameSize);
             const name = this.data.toString('utf-8', this.pos, this.pos + nameSize);
             this.pos += nameSize;
             functionNames.push({ index: funcIndex, name });
@@ -195,7 +198,7 @@ class WmlscDecoder {
         for (let i = 0; i < numFunctions; i++) {
             const numArgs = this.readUint8();
             const numLocals = this.readUint8();
-            const bytecodeSize = this.readMbUint32();
+            const bytecodeSize = this.readSize();
             const bytecode = new Uint8Array(this.data.buffer, this.data.byteOffset + this.pos, bytecodeSize);
             this.pos += bytecodeSize;
             functions.push({ numArgs, numLocals, bytecodeSize, bytecode: new Uint8Array(bytecode) });
@@ -205,6 +208,20 @@ class WmlscDecoder {
     }
 
     // --- Primitive readers ---
+
+    /** A size of what follows: past the unit it fails verification (§11.1),
+     *  rather than being cut short (or, for a function, read on past it). */
+    private checkSize(n: number): void {
+        if (n > this.data.length - this.pos) {
+            throw new Error(`Verification failed: size ${n} at offset ${this.pos} runs past the unit`);
+        }
+    }
+
+    private readSize(): number {
+        const n = this.readMbUint32();
+        this.checkSize(n);
+        return n;
+    }
 
     private readUint8(): number {
         return this.data[this.pos++];
@@ -257,13 +274,23 @@ export function verifyModule(mod: WmlscModule): string[] {
     const nConst = mod.constants.length;
     const nFunc = mod.functions.length;
 
+    // §11.1: a name's index must be an existing function
+    for (const fn of mod.functionNames) {
+        if (fn.index >= nFunc) { errors.push(`function name "${fn.name}" for function ${fn.index} ≥ ${nFunc}`); }
+    }
+
     for (let fi = 0; fi < mod.functions.length; fi++) {
         const bc = mod.functions[fi].bytecode;
         const fname = mod.functions[fi].name ?? `function_${fi}`;
         const flag = (at: number, msg: string) => errors.push(`${fname}@${at}: ${msg}`);
+        // §11.2: a jump's target must be the start of an instruction (or the
+        // function's end); checked once every start is known
+        const starts = new Set<number>([bc.length]);
+        const jumps: Array<[number, number]> = [];
         let pos = 0;
         while (pos < bc.length) {
             const start = pos;
+            starts.add(start);
             const byte = bc[pos++];
             const info = classifyOpcode(byte);
 
@@ -285,16 +312,24 @@ export function verifyModule(mod: WmlscModule): string[] {
                         break;
                     case Opcode.JUMP_FW: case Opcode.TJUMP_FW:
                         if (start + 2 + bc[pos] > bc.length) { flag(start, `forward jump target out of range`); }
+                        else { jumps.push([start, start + 2 + bc[pos]]); }
                         break;
-                    case Opcode.JUMP_FW_W: case Opcode.TJUMP_FW_W:
-                        if (start + 3 + ((bc[pos] << 8) | bc[pos + 1]) > bc.length) { flag(start, `forward jump target out of range`); }
+                    case Opcode.JUMP_FW_W: case Opcode.TJUMP_FW_W: {
+                        const t = start + 3 + ((bc[pos] << 8) | bc[pos + 1]);
+                        if (t > bc.length) { flag(start, `forward jump target out of range`); }
+                        else { jumps.push([start, t]); }
                         break;
+                    }
                     case Opcode.JUMP_BW: case Opcode.TJUMP_BW:
                         if (start - bc[pos] < 0) { flag(start, `backward jump target out of range`); }
+                        else { jumps.push([start, start - bc[pos]]); }
                         break;
-                    case Opcode.JUMP_BW_W: case Opcode.TJUMP_BW_W:
-                        if (start - ((bc[pos] << 8) | bc[pos + 1]) < 0) { flag(start, `backward jump target out of range`); }
+                    case Opcode.JUMP_BW_W: case Opcode.TJUMP_BW_W: {
+                        const t = start - ((bc[pos] << 8) | bc[pos + 1]);
+                        if (t < 0) { flag(start, `backward jump target out of range`); }
+                        else { jumps.push([start, t]); }
                         break;
+                    }
                 }
                 pos += meta.operandBytes;
             } else {
@@ -311,12 +346,17 @@ export function verifyModule(mod: WmlscModule): string[] {
                         break;
                     case 'JUMP_FW_S': case 'TJUMP_FW_S':
                         if (start + 1 + info.embeddedValue! > bc.length) { flag(start, `forward jump target out of range`); }
+                        else { jumps.push([start, start + 1 + info.embeddedValue!]); }
                         break;
                     case 'JUMP_BW_S':
                         if (start - info.embeddedValue! < 0) { flag(start, `backward jump target out of range`); }
+                        else { jumps.push([start, start - info.embeddedValue!]); }
                         break;
                 }
             }
+        }
+        for (const [at, target] of jumps) {
+            if (!starts.has(target)) { flag(at, `jump target ${target} is not the start of an instruction`); }
         }
     }
     return errors;

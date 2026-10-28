@@ -11,7 +11,7 @@
  */
 
 import { parseWmlFormatMask, resolveEmptyOk } from './wmlValidator';
-import { escapeHtml } from './shared/htmlUtils';
+import { escapeHtml, escapeHtmlKeepRefs, decodeEntities } from './shared/htmlUtils';
 
 // Re-export so existing consumers that import escapeHtml from here continue to work.
 export { escapeHtml };
@@ -45,6 +45,20 @@ export type ImageResolver = (src: string) => string;
 
 // ── Attribute / HTML helpers ─────────────────────────────────────
 
+/*
+ * WML attribute values arrive here with their character references
+ * unresolved ("a=1&amp;b=2", "Men&uacute;").  Escaping them again turned
+ * &amp; into &amp;amp;, so links sent "amp;b" to the server and labels
+ * showed "&uacute;".  Output keeps the references for the HTML parser to
+ * resolve once; values carried as JSON are resolved here instead, since
+ * the JSON must survive the attribute's own decoding.
+ */
+const escapeAttr = escapeHtmlKeepRefs;
+
+function decodePairs(pairs: Array<{name: string, value: string}>): Array<{name: string, value: string}> {
+    return pairs.map((p) => ({ name: decodeEntities(p.name), value: decodeEntities(p.value) }));
+}
+
 export function getAttr(attrs: string, name: string): string | undefined {
     const regex = new RegExp(`(?:^|\\s)${name}\\s*=\\s*"([^"]*)"`, 'i');
     const match = attrs.match(regex);
@@ -69,7 +83,7 @@ export function extractSetvars(content: string): Array<{name: string, value: str
 
 export function setvarsToAttr(setvars: Array<{name: string, value: string}>): string {
     if (setvars.length === 0) { return ''; }
-    return ` data-setvars="${escapeHtml(JSON.stringify(setvars))}"`;
+    return ` data-setvars="${escapeHtml(JSON.stringify(decodePairs(setvars)))}"`;
 }
 
 export function extractPostfields(content: string): Array<{name: string, value: string}> {
@@ -78,13 +92,16 @@ export function extractPostfields(content: string): Array<{name: string, value: 
 
 export function postfieldsToAttr(postfields: Array<{name: string, value: string}>): string {
     if (postfields.length === 0) { return ''; }
-    return ` data-postfields="${escapeHtml(JSON.stringify(postfields))}"`;
+    return ` data-postfields="${escapeHtml(JSON.stringify(decodePairs(postfields)))}"`;
 }
 
 export function methodToAttr(attrs: string): string {
     const method = getAttr(attrs, 'method');
-    if (!method) { return ''; }
-    return ` data-method="${escapeHtml(method)}"`;
+    // accept-charset rides with the method: both shape the request (§9.5.1)
+    const cs = getAttr(attrs, 'accept-charset');
+    const csAttr = cs ? ` data-accept-charset="${escapeAttr(cs)}"` : '';
+    if (!method) { return csAttr; }
+    return ` data-method="${escapeAttr(method)}"${csAttr}`;
 }
 
 /** Emit data-sendreferer when a <go sendreferer="true"> requests it (WAP-191 §9.5.1). */
@@ -247,21 +264,21 @@ export function transformWmlBody(body: string, resolveImage: ImageResolver): str
             const goAttrs = (preGoAttrs || '') + 'href="' + href + '"' + (postGoAttrs || '');
             const setvars = goContent ? extractSetvars(goContent) : [];
             const postfields = goContent ? extractPostfields(goContent) : [];
-            return `<div class="wml-onevent" data-type="${escapeHtml(type)}" data-href="${escapeHtml(href)}"${methodToAttr(goAttrs)}${sendrefererToAttr(goAttrs)}${setvarsToAttr(setvars)}${postfieldsToAttr(postfields)} style="display:none"></div>`;
+            return `<div class="wml-onevent" data-type="${escapeAttr(type)}" data-href="${escapeAttr(href)}"${methodToAttr(goAttrs)}${sendrefererToAttr(goAttrs)}${setvarsToAttr(setvars)}${postfieldsToAttr(postfields)} style="display:none"></div>`;
         });
 
     // onevent with refresh task - extract setvars
     html = html.replace(/<onevent\s+type="([^"]*)">([\s\S]*?)<refresh>([\s\S]*?)<\/refresh>[\s\S]*?<\/onevent>/gi,
         (_, type, _pre, refreshContent) => {
             const setvars = extractSetvars(refreshContent);
-            return `<div class="wml-onevent" data-type="${escapeHtml(type)}" data-action="refresh"${setvarsToAttr(setvars)} style="display:none"></div>`;
+            return `<div class="wml-onevent" data-type="${escapeAttr(type)}" data-action="refresh"${setvarsToAttr(setvars)} style="display:none"></div>`;
         });
 
     // onevent with prev task - extract setvars
     html = html.replace(/<onevent\s+type="([^"]*)">([\s\S]*?)<prev(?:\s*\/>[\s\S]*?|>([\s\S]*?)<\/prev>[\s\S]*?)<\/onevent>/gi,
         (_, type, _pre, prevContent) => {
             const setvars = prevContent ? extractSetvars(prevContent) : [];
-            return `<div class="wml-onevent" data-type="${escapeHtml(type)}" data-action="prev"${setvarsToAttr(setvars)} style="display:none"></div>`;
+            return `<div class="wml-onevent" data-type="${escapeAttr(type)}" data-action="prev"${setvarsToAttr(setvars)} style="display:none"></div>`;
         });
 
     // onevent with noop task
@@ -270,7 +287,7 @@ export function transformWmlBody(body: string, resolveImage: ImageResolver): str
     // Timer -> hidden data
     html = html.replace(/<timer\s+([^>]*?)\/>/gi, (_, attrs) => {
         const value = getAttr(attrs, 'value') || '0';
-        return `<div class="wml-timer" data-value="${escapeHtml(value)}" style="display:none"></div>`;
+        return `<div class="wml-timer" data-value="${escapeAttr(value)}" style="display:none"></div>`;
     });
 
     // do elements -> buttons
@@ -282,7 +299,7 @@ export function transformWmlBody(body: string, resolveImage: ImageResolver): str
             const href = getAttr(goAttrs, 'href') || '#';
             const setvars = goContent ? extractSetvars(goContent) : [];
             const postfields = goContent ? extractPostfields(goContent) : [];
-            return `<button class="wml-do wml-do-${escapeHtml(type)}" data-type="${escapeHtml(type)}" data-href="${escapeHtml(href)}"${methodToAttr(goAttrs)}${sendrefererToAttr(goAttrs)}${setvarsToAttr(setvars)}${postfieldsToAttr(postfields)}>${escapeHtml(label)}</button>`;
+            return `<button class="wml-do wml-do-${escapeAttr(type)}" data-type="${escapeAttr(type)}" data-href="${escapeAttr(href)}"${methodToAttr(goAttrs)}${sendrefererToAttr(goAttrs)}${setvarsToAttr(setvars)}${postfieldsToAttr(postfields)}>${escapeAttr(label)}</button>`;
         });
 
     html = html.replace(/<do\s+([^>]*)>\s*<prev(?:\s*\/>|>([\s\S]*?)<\/prev>)\s*<\/do>/gi,
@@ -290,7 +307,7 @@ export function transformWmlBody(body: string, resolveImage: ImageResolver): str
             const type = getAttr(doAttrs, 'type') || 'prev';
             const label = getAttr(doAttrs, 'label') || 'Back';
             const setvars = prevContent ? extractSetvars(prevContent) : [];
-            return `<button class="wml-do wml-do-${escapeHtml(type)}" data-type="${escapeHtml(type)}" data-action="prev"${setvarsToAttr(setvars)}>${escapeHtml(label)}</button>`;
+            return `<button class="wml-do wml-do-${escapeAttr(type)}" data-type="${escapeAttr(type)}" data-action="prev"${setvarsToAttr(setvars)}>${escapeAttr(label)}</button>`;
         });
 
     html = html.replace(/<do\s+[^>]*>\s*<noop\s*\/>\s*<\/do>/gi, '');
@@ -300,7 +317,7 @@ export function transformWmlBody(body: string, resolveImage: ImageResolver): str
             const type = getAttr(doAttrs, 'type') || 'accept';
             const label = getAttr(doAttrs, 'label') || type;
             const setvars = extractSetvars(refreshContent);
-            return `<button class="wml-do wml-do-${escapeHtml(type)}" data-type="${escapeHtml(type)}" data-action="refresh"${setvarsToAttr(setvars)}>${escapeHtml(label)}</button>`;
+            return `<button class="wml-do wml-do-${escapeAttr(type)}" data-type="${escapeAttr(type)}" data-action="refresh"${setvarsToAttr(setvars)}>${escapeAttr(label)}</button>`;
         });
 
     // setvar (standalone ones not inside go/prev/refresh tasks)
@@ -328,7 +345,7 @@ export function transformWmlBody(body: string, resolveImage: ImageResolver): str
             
             const setvars = extractSetvars(goContent);
             const postfields = extractPostfields(goContent);
-            return `<a class="wml-anchor ${escapeHtml(cls)}" data-accesskey="${accesskey}" data-href="${escapeHtml(href)}"${methodToAttr(goAttrs)}${sendrefererToAttr(goAttrs)}${setvarsToAttr(setvars)}${postfieldsToAttr(postfields)}>${cleanText}</a>`;
+            return `<a class="wml-anchor ${escapeAttr(cls)}" data-accesskey="${accesskey}" data-href="${escapeAttr(href)}"${methodToAttr(goAttrs)}${sendrefererToAttr(goAttrs)}${setvarsToAttr(setvars)}${postfieldsToAttr(postfields)}>${cleanText}</a>`;
         });
 
     // anchor with prev task - handles both text orderings
@@ -345,7 +362,7 @@ export function transformWmlBody(body: string, resolveImage: ImageResolver): str
             const cleanText = content.replace(/<prev[\s\S]*?<\/prev>|<prev\s*\/>/i, '').trim();
             
             const setvars = extractSetvars(prevContent);
-            return `<a class="wml-anchor ${escapeHtml(cls)}" data-accesskey="${accesskey}" data-action="prev"${setvarsToAttr(setvars)}>${cleanText}</a>`;
+            return `<a class="wml-anchor ${escapeAttr(cls)}" data-accesskey="${accesskey}" data-action="prev"${setvarsToAttr(setvars)}>${cleanText}</a>`;
         });
 
     // anchor with refresh task - handles both text orderings
@@ -362,7 +379,7 @@ export function transformWmlBody(body: string, resolveImage: ImageResolver): str
             const cleanText = content.replace(/<refresh[\s\S]*?<\/refresh>/i, '').trim();
             
             const setvars = extractSetvars(refreshContent);
-            return `<a class="wml-anchor ${escapeHtml(cls)}" data-accesskey="${accesskey}" data-action="refresh"${setvarsToAttr(setvars)}>${cleanText}</a>`;
+            return `<a class="wml-anchor ${escapeAttr(cls)}" data-accesskey="${accesskey}" data-action="refresh"${setvarsToAttr(setvars)}>${cleanText}</a>`;
         });
 
     // <a href="..."> (skip already-processed wml-anchor/wml-link elements)
@@ -371,7 +388,7 @@ export function transformWmlBody(body: string, resolveImage: ImageResolver): str
             if (/class="wml-/.test(attrs)) { return match; }
             const href = getAttr(attrs, 'href') || '#';
             const accesskey = getAttr(attrs, 'accesskey') || '';
-            return `<a class="wml-link" data-accesskey="${accesskey}" data-href="${escapeHtml(href)}">${text}</a>`;
+            return `<a class="wml-link" data-accesskey="${accesskey}" data-href="${escapeAttr(href)}">${text}</a>`;
         });
 
     // input
@@ -394,13 +411,13 @@ export function transformWmlBody(body: string, resolveImage: ImageResolver): str
             if (fmtMax > 0) { effectiveMaxlength = String(fmtMax); }
         }
 
-        let result = `<input type="${htmlType}" name="${escapeHtml(name)}" placeholder="${escapeHtml(title)}" class="wml-input"`;
-        if (effectiveMaxlength) { result += ` maxlength="${escapeHtml(effectiveMaxlength)}"`; }
-        if (pattern) { result += ` pattern="${escapeHtml(pattern)}"`; }
+        let result = `<input type="${htmlType}" name="${escapeAttr(name)}" placeholder="${escapeAttr(title)}" class="wml-input"`;
+        if (effectiveMaxlength) { result += ` maxlength="${escapeAttr(effectiveMaxlength)}"`; }
+        if (pattern) { result += ` pattern="${escapeAttr(pattern)}"`; }
         if (isRequired) { result += ` required`; }
-        result += ` data-format="${escapeHtml(format)}"`;
-        if (emptyok !== undefined) { result += ` data-emptyok="${escapeHtml(emptyok)}"`; }
-        result += ` value="${escapeHtml(value)}">`;
+        result += ` data-format="${escapeAttr(format)}"`;
+        if (emptyok !== undefined) { result += ` data-emptyok="${escapeAttr(emptyok)}"`; }
+        result += ` value="${escapeAttr(value)}">`;
         return result;
     });
 
@@ -408,8 +425,8 @@ export function transformWmlBody(body: string, resolveImage: ImageResolver): str
     html = html.replace(/<option([^>]*)>\s*<onevent\s+type="onpick">\s*<go\s+href="([^"]*)"[^>]*?(?:\/>|>[\s\S]*?<\/go>)\s*<\/onevent>([\s\S]*?)<\/option>/gi,
         (_, attrs, href, text) => {
             const value = getAttr(attrs, 'value');
-            const valueAttr = value !== undefined ? ` value="${escapeHtml(value)}"` : '';
-            return `<option${valueAttr} data-onpick="${escapeHtml(href)}">${text.trim()}</option>`;
+            const valueAttr = value !== undefined ? ` value="${escapeAttr(value)}"` : '';
+            return `<option${valueAttr} data-onpick="${escapeAttr(href)}">${text.trim()}</option>`;
         });
 
     // option with onpick shorthand -> data attribute
@@ -428,7 +445,7 @@ export function transformWmlBody(body: string, resolveImage: ImageResolver): str
         const iname = getAttr(attrs, 'iname') || '';
         const ivalue = getAttr(attrs, 'ivalue') || '';
         const title = getAttr(attrs, 'title') || '';
-        return `<select${name ? ` name="${escapeHtml(name)}"` : ''} class="wml-select"${multiple ? ' multiple' : ''}${selectValue ? ` data-value="${escapeHtml(selectValue)}"` : ''}${iname ? ` data-iname="${escapeHtml(iname)}"` : ''}${ivalue ? ` data-ivalue="${escapeHtml(ivalue)}"` : ''}${title ? ` title="${escapeHtml(title)}"` : ''}>`;
+        return `<select${name ? ` name="${escapeAttr(name)}"` : ''} class="wml-select"${multiple ? ' multiple' : ''}${selectValue ? ` data-value="${escapeAttr(selectValue)}"` : ''}${iname ? ` data-iname="${escapeAttr(iname)}"` : ''}${ivalue ? ` data-ivalue="${escapeAttr(ivalue)}"` : ''}${title ? ` title="${escapeAttr(title)}"` : ''}>`;
     });
 
     // table with columns and alignment
@@ -436,7 +453,7 @@ export function transformWmlBody(body: string, resolveImage: ImageResolver): str
         const columns = getAttr(attrs, 'columns') || '2';
         const title = getAttr(attrs, 'title') || '';
         const align = getAttr(attrs, 'align') || '';
-        return `<table class="wml-table" data-columns="${columns}"${align ? ` data-align="${escapeHtml(align)}"` : ''}${title ? ` title="${escapeHtml(title)}"` : ''}>`;
+        return `<table class="wml-table" data-columns="${columns}"${align ? ` data-align="${escapeAttr(align)}"` : ''}${title ? ` title="${escapeAttr(title)}"` : ''}>`;
     });
 
     // fieldset
@@ -465,17 +482,22 @@ export function transformWmlBody(body: string, resolveImage: ImageResolver): str
         const width = getAttr(attrs, 'width') || '';
         const height = getAttr(attrs, 'height') || '';
         const resolvedSrc = resolveImage(src);
-        return `<img src="${resolvedSrc}" alt="${escapeHtml(alt)}" class="wml-img"${width ? ` width="${width}"` : ''}${height ? ` height="${height}"` : ''}>`;
+        return `<img src="${resolvedSrc}" alt="${escapeAttr(alt)}" class="wml-img"${width ? ` width="${width}"` : ''}${height ? ` height="${height}"` : ''}>`;
     });
 
     // <br/> normalization
     html = html.replace(/<br\s*\/?>/gi, '<br>');
 
-    // WML variables: $(var) or $var -> span placeholders
-    html = html.replace(/(<[^>]+>)|\$\(([A-Za-z_][A-Za-z0-9_]*)(?::(?:escape|noesc|unesc))?\)/g,
-        (match, tag, varName) => {
+    // WML variables: $(var) or $var -> span placeholders.
+    // The conversion is captured, not just matched: $(x:escape) must URL-encode
+    // the value and $(x:unesc) must URL-decode it (WML 1.3 §10.3.1). Discarding
+    // it here left updateVariables() with no way to tell the three apart, so
+    // every form rendered the raw value and :escape/:unesc did nothing at all.
+    html = html.replace(/(<[^>]+>)|\$\(([A-Za-z_][A-Za-z0-9_]*)(?::(escape|noesc|unesc))?\)/g,
+        (match, tag, varName, conversion) => {
             if (tag) { return tag; }
-            return `<span class="wml-var" data-var="${varName}">[${varName}]</span>`;
+            const conv = conversion ? ` data-conv="${conversion}"` : '';
+            return `<span class="wml-var" data-var="${varName}"${conv}>[${varName}]</span>`;
         });
     html = html.replace(/(<[^>]+>)|\$([A-Za-z_][A-Za-z0-9_]*)/g,
         (match, tag, varName) => {
@@ -510,11 +532,11 @@ export function renderCards(
         const merged = mergeTemplate(card.body, card, tmpl);
         const cardBody = transformWmlBody(merged.body, resolveImage);
         const mc = merged.card;
-        const ontimer = mc.ontimer ? ` data-ontimer="${escapeHtml(mc.ontimer)}"` : '';
-        const onenterforward = mc.onenterforward ? ` data-onenterforward="${escapeHtml(mc.onenterforward)}"` : '';
-        const onenterbackward = mc.onenterbackward ? ` data-onenterbackward="${escapeHtml(mc.onenterbackward)}"` : '';
+        const ontimer = mc.ontimer ? ` data-ontimer="${escapeAttr(mc.ontimer)}"` : '';
+        const onenterforward = mc.onenterforward ? ` data-onenterforward="${escapeAttr(mc.onenterforward)}"` : '';
+        const onenterbackward = mc.onenterbackward ? ` data-onenterbackward="${escapeAttr(mc.onenterbackward)}"` : '';
         const newcontext = mc.newcontext ? ' data-newcontext="true"' : '';
-        return `<div class="wml-card" id="${escapeHtml(mc.id)}" data-title="${escapeHtml(mc.title)}"${ontimer}${onenterforward}${onenterbackward}${newcontext} style="display:${display}">${cardBody}</div>`;
+        return `<div class="wml-card" id="${escapeAttr(mc.id)}" data-title="${escapeAttr(mc.title)}"${ontimer}${onenterforward}${onenterbackward}${newcontext} style="display:${display}">${cardBody}</div>`;
     });
 
     return {

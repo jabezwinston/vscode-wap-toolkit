@@ -22,17 +22,20 @@ const DEFAULT_PREVIEW_HTTP_PORT = 2703;
 export function startPreviewServer(context: vscode.ExtensionContext): string {
     const config = vscode.workspace.getConfiguration('wap');
     const port = config.get<number>('wml.preview.port', DEFAULT_PREVIEW_HTTP_PORT);
+    const bindAddress = config.get<string>('bindAddress', '127.0.0.1') || '127.0.0.1';
+    // A wildcard bind is still reachable via localhost; a specific address is not
+    const host = (bindAddress === '0.0.0.0' || bindAddress === '::') ? 'localhost' : bindAddress;
     currentPort = port;
 
     if (server) {
-        return `http://localhost:${port}`;
+        return `http://${host}:${port}`;
     }
 
     server = http.createServer((req, res) => {
         handleRequest(req, res, context);
     });
 
-    server.listen(port, () => {
+    server.listen(port, bindAddress, () => {
         vscode.window.showInformationMessage(`WML Preview Server running on port ${port}`);
     });
 
@@ -42,7 +45,7 @@ export function startPreviewServer(context: vscode.ExtensionContext): string {
         }
     });
 
-    return `http://localhost:${port}`;
+    return `http://${host}:${port}`;
 }
 
 export function stopPreviewServer(): void {

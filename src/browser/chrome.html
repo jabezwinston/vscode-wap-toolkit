@@ -1,0 +1,140 @@
+<!--
+     Copyright (C) 2026 Jabez Winston
+     SPDX-License-Identifier: Apache-2.0
+
+     Browser chrome markup - address bar, phone frame, softkeys, dialogs and the
+     downloads/history/settings panels.
+
+     A standalone asset rather than a string inside browserPanel.ts so every host
+     renders the same UI: src/browser/browser.js drives these element ids
+     directly, so a host that hand-copied this markup would silently drift out of
+     sync with it. Loaded the same way browser.css and browser.js already are.
+-->
+  <div class="browser-chrome">
+    <div class="address-bar">
+      <button id="btn-back" onclick="doBack()" title="Back">←</button>
+      <input id="url-input" type="text" placeholder="Enter URL (e.g. http://wap-server:3003/)" spellcheck="false" />
+      <button id="btn-go" onclick="doNavigate()" title="Go">Go</button>
+      <button id="btn-refresh" onclick="doRefresh()" title="Refresh">↻</button>
+      <button id="btn-debug" onclick="doDebug()" title="Debug WMLScript">🐞</button>
+      <button id="btn-menu" onclick="toggleMenu()" title="Menu">⋮</button>
+    </div>
+    <div class="browser-menu" id="browser-menu">
+      <button class="menu-item" onclick="doSavePage()">Save Page</button>
+      <button class="menu-item" onclick="doShowHistory()">History</button>
+      <button class="menu-item" onclick="doClearCookies()">Clear Cookies</button>
+      <button class="menu-item" onclick="doShowDownloads()">Downloads</button>
+      <button class="menu-item" onclick="doShowSettings()">Settings</button>
+    </div>
+    <div class="status-bar" id="status-bar">Ready</div>
+  </div>
+
+  <div class="phone-container">
+    <div class="wap-phone-frame">
+      <div class="phone-header">
+        <span class="phone-signal">&#9679;&#9679;&#9679;&#9675;&#9675;</span>
+        <span class="phone-title" id="card-title">WAP Browser</span>
+        <span class="phone-battery">&#9608;&#9608;&#9608;</span>
+      </div>
+      <div class="phone-screen" id="phone-screen">
+        <div class="browser-welcome">
+          <p>Enter a URL above to browse WAP sites.</p>
+        </div>
+      </div>
+      <div class="phone-softkeys">
+        <div class="softkey-menu-overlay" id="softkey-overlay"></div>
+        <div class="softkey-menu" id="softkey-menu"></div>
+        <button class="softkey softkey-left" id="softkey-left" onclick="wmlSoftkeyLeft()"></button>
+        <button class="softkey softkey-right" id="softkey-right" onclick="wmlSoftkeyRight()">Back</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Dialog overlay for WMLScript Dialogs -->
+  <div class="dialog-overlay" id="dialog-overlay">
+    <div class="dialog-box">
+      <div class="dialog-message" id="dialog-message"></div>
+      <input class="dialog-input" id="dialog-input" type="text" />
+      <div class="dialog-buttons">
+        <button class="dialog-btn" id="dialog-cancel">Cancel</button>
+        <button class="dialog-btn primary" id="dialog-ok">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Downloads panel -->
+  <div class="downloads-overlay" id="downloads-overlay">
+    <div class="downloads-panel">
+      <div class="downloads-header">
+        <span>Downloads</span>
+        <button class="downloads-close" onclick="doCloseDownloads()">✕</button>
+      </div>
+      <div class="downloads-list" id="downloads-list">
+        <div class="downloads-empty">No downloads yet.</div>
+      </div>
+      <div class="downloads-actions">
+        <button class="dialog-btn" onclick="doClearDownloads()">Clear All</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- History panel -->
+  <div class="downloads-overlay" id="history-overlay">
+    <div class="downloads-panel">
+      <div class="downloads-header">
+        <span>History</span>
+        <button class="downloads-close" onclick="doCloseHistory()">✕</button>
+      </div>
+      <div class="downloads-list" id="history-list">
+        <div class="downloads-empty">No history yet.</div>
+      </div>
+      <div class="downloads-actions">
+        <button class="dialog-btn" onclick="doClearHistory()">Clear All</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Image right-click context menu -->
+  <div class="img-context-menu" id="img-context-menu">
+    <button class="menu-item" onclick="doSaveImageAs()">Save Image As…</button>
+  </div>
+
+  <!-- Settings panel -->
+  <div class="settings-overlay" id="settings-overlay">
+    <div class="settings-panel">
+      <div class="settings-header">
+        <span>Settings</span>
+        <button class="downloads-close" onclick="doCloseSettings()">✕</button>
+      </div>
+      <div class="settings-body">
+        <div class="settings-group">
+          <label class="settings-label">Transport</label>
+          <select class="settings-input" id="setting-transport">
+            <option value="http">HTTP (Direct)</option>
+            <option value="wsp">WSP (WAP Gateway)</option>
+          </select>
+        </div>
+        <div class="settings-group wsp-only" id="wsp-settings">
+          <label class="settings-label">Gateway Host</label>
+          <input class="settings-input" id="setting-gatewayHost" type="text" placeholder="127.0.0.1" />
+          <label class="settings-label">Gateway Port (CL/GET)</label>
+          <input class="settings-input" id="setting-gatewayPort" type="number" min="1" max="65535" placeholder="9200" />
+          <label class="settings-label">Gateway Port (CO/POST)</label>
+          <input class="settings-input" id="setting-wspCoPort" type="number" min="1" max="65535" placeholder="9201" />
+        </div>
+        <div class="settings-group">
+          <label class="settings-label">Screen Size</label>
+          <div class="settings-row">
+            <input class="settings-input settings-input-short" id="setting-screenWidth" type="number" min="120" max="640" placeholder="280" />
+            <span class="settings-x">×</span>
+            <input class="settings-input settings-input-short" id="setting-screenHeight" type="number" min="160" max="800" placeholder="380" />
+            <span class="settings-unit">px</span>
+          </div>
+        </div>
+      </div>
+      <div class="settings-footer">
+        <button class="dialog-btn" onclick="doCloseSettings()">Cancel</button>
+        <button class="dialog-btn primary" onclick="doSaveSettings()">Apply</button>
+      </div>
+    </div>
+  </div>

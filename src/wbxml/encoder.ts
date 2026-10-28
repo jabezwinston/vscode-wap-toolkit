@@ -221,19 +221,22 @@ class WbxmlEncoder {
                 if (match) {
                     const varName = match[1];
                     const escType = match[2];
-                    // EXT_I_0 = escaped, EXT_I_1 = unescaped, EXT_I_2 = no-escaping
-                    if (escType === 'unesc') {
+                    // EXT_I_0 = escaped, EXT_I_1 = unescaped, EXT_I_2 = no transformation.
+                    // In text content the default conversion is *none*
+                    // (WML 1.3 §10.3.1 — only URI attribute contexts
+                    // default to escape), so unspecified maps to EXT_I_2.
+                    if (escType === 'escape') {
+                        this.encodeVariableRef(varName, 0x40, out); // EXT_I_0
+                    } else if (escType === 'unesc') {
                         this.encodeVariableRef(varName, 0x41, out); // EXT_I_1
-                    } else if (escType === 'noesc') {
-                        this.encodeVariableRef(varName, 0x42, out); // EXT_I_2
                     } else {
-                        this.encodeVariableRef(varName, 0x40, out); // EXT_I_0 (default: escape)
+                        this.encodeVariableRef(varName, 0x42, out); // EXT_I_2 (noesc / default)
                     }
                 }
             } else if (part.startsWith('$') && part.length > 1) {
-                // Simple variable: $name
+                // Simple variable: $name — default conversion in text is none
                 const varName = part.substring(1);
-                this.encodeVariableRef(varName, 0x40, out); // EXT_I_0
+                this.encodeVariableRef(varName, 0x42, out); // EXT_I_2
             } else {
                 // Plain text - encode as-is (preserve whitespace)
                 if (part) {
@@ -382,6 +385,13 @@ class WbxmlEncoder {
         target.push(...bytes);
     }
 
+    /** Elements with mixed content, where whitespace between children is
+     *  significant (it separates inline siblings, e.g. two <anchor>s). */
+    private static readonly MIXED_CONTENT = new Set([
+        'p', 'td', 'a', 'anchor', 'b', 'big', 'em', 'i', 'small',
+        'strong', 'u', 'fieldset',
+    ]);
+
     /** Simple XML parser - parses WML XML into a node tree */
     private parseXml(xml: string): XmlNode | null {
         let pos = 0;
@@ -390,8 +400,8 @@ class WbxmlEncoder {
             while (pos < xml.length && /\s/.test(xml[pos])) { pos++; }
         }
 
-        function parseNode(): XmlNode | null {
-            skipWhitespace();
+        function parseNode(inMixed: boolean): XmlNode | null {
+            if (!inMixed) { skipWhitespace(); }
             if (pos >= xml.length) { return null; }
 
             if (xml.startsWith('<!--', pos)) {
@@ -418,8 +428,10 @@ class WbxmlEncoder {
             const start = pos;
             while (pos < xml.length && xml[pos] !== '<') { pos++; }
             const text = xml.substring(start, pos);
-            if (text.trim().length === 0 && text.indexOf('\n') !== -1) {
-                return null; // Skip pure whitespace
+            if (text.trim().length === 0) {
+                // Whitespace-only: significant (as a single space) between
+                // inline siblings in mixed content, structural elsewhere.
+                return inMixed ? { type: 'text', text: ' ' } : null;
             }
             return { type: 'text', text };
         }
@@ -471,9 +483,10 @@ class WbxmlEncoder {
             pos++; // skip >
 
             // Parse children
+            const mixed = WbxmlEncoder.MIXED_CONTENT.has(name.toLowerCase());
             const children: XmlNode[] = [];
             while (pos < xml.length) {
-                skipWhitespace();
+                if (!mixed) { skipWhitespace(); }
                 if (xml.startsWith('</', pos)) {
                     // Closing tag
                     pos += 2;
@@ -481,7 +494,7 @@ class WbxmlEncoder {
                     pos++; // skip >
                     break;
                 }
-                const child = parseNode();
+                const child = parseNode(mixed);
                 if (child) {
                     children.push(child);
                 }
@@ -490,6 +503,6 @@ class WbxmlEncoder {
             return { type: 'element', name, attributes, children };
         }
 
-        return parseNode();
+        return parseNode(false);
     }
 }

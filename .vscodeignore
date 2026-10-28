@@ -3,7 +3,6 @@
 .claude/**
 .github/**
 src/**
-node_modules/**
 **/*.map
 .DS_Store
 *.vsix
@@ -11,6 +10,8 @@ node_modules/**
 tsconfig.json
 .eslintrc.js
 *.sh
+idea.md
+wap-browser.md
 docs/**
 nmit/**
 examples/**

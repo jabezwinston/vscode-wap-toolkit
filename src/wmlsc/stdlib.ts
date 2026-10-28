@@ -377,8 +377,9 @@ function langLib(ctx: LibraryContext): StdLibFunction[] {
                 : Math.floor(Math.random() * 2147483646) + 1;
             return mkString('');
         },
-        // 14: characterSet()
-        () => mkInt(4), // UTF-8 MIBEnum = 106, but WMLScript uses 4 for iso-8859-1
+        // 14: characterSet() §7.15 — the native charset: strings hold any
+        // Unicode character, as UTF-8 (MIBenum 106) in wap-browser-c
+        () => mkInt(106),
     ];
 }
 
@@ -684,6 +685,28 @@ export class DialogSuspend extends Error {
     constructor(public readonly request: DialogRequest) {
         super('WMLScript dialog requires interactive execution');
         this.name = 'DialogSuspend';
+    }
+
+    /**
+     * Recognise a suspend without relying on its prototype.
+     *
+     * Subclassing a built-in does not survive an ES5 downlevel: the emitted
+     * `_super.call(this, ...) || this` keeps the *fresh* Error that Error()
+     * returns rather than `this`, so the instance's prototype is
+     * Error.prototype and `instanceof DialogSuspend` is false. This compiles to
+     * ES2020 for the extension, where that is a non-issue, but a consumer
+     * targeting ES5 — the Android browser does, its WebView floor being
+     * Chromium 30 — silently lost every Dialogs.* call: the suspend escaped
+     * runAsync and surfaced as the error meant to be impossible to see,
+     * "WMLScript dialog requires interactive execution".
+     *
+     * Matching on shape holds under either target.
+     */
+    static is(e: unknown): e is DialogSuspend {
+        if (e instanceof DialogSuspend) { return true; }
+        const candidate = e as { name?: unknown; request?: unknown } | null | undefined;
+        return !!candidate && candidate.name === 'DialogSuspend'
+            && typeof candidate.request === 'object' && candidate.request !== null;
     }
 }
 

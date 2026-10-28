@@ -22,10 +22,11 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as url from 'url';
 import { encodeWbxml } from './wbxml/encoder';
+import { decodeDeck } from './shared/charset';
 import { compileWmls } from './wmlsc/compiler';
 import { xmlEscape } from './shared/htmlUtils';
 import {
-    WTP_PDU_INVOKE, WTP_PDU_RESULT, WTP_PDU_ACK,
+    WTP_PDU_INVOKE, WTP_PDU_RESULT, WTP_PDU_ACK, WTP_TID_RESPONDER_BIT,
     WSP_PDU_CONNECT, WSP_PDU_REPLY, WSP_PDU_DISCONNECT, WSP_PDU_GET, WSP_PDU_POST,
     WSP_CT, CT_WSP,
     encodeUintvar, decodeUintvar,
@@ -37,7 +38,8 @@ const DEFAULT_WSP_PORT = 9200;
 const DEFAULT_WSP_CO_PORT = 9201;
 const DEFAULT_HTTP_PORT = 3003; // updated per request
 const DEFAULT_PREVIEW_PORT = 2703; // updated per request
-const BIND_ADDR = '0.0.0.0';
+const DEFAULT_BIND_ADDR = '127.0.0.1'; // loopback unless wap.bindAddress says otherwise
+let bindAddr = DEFAULT_BIND_ADDR;
 
 function getWapServerPorts() {
     const config = vscode.workspace.getConfiguration('wap');
@@ -45,6 +47,7 @@ function getWapServerPorts() {
         wspPort: config.get<number>('wspPort', DEFAULT_WSP_PORT),
         wspCoPort: config.get<number>('wspCoPort', DEFAULT_WSP_CO_PORT),
         httpPort: config.get<number>('httpPort', DEFAULT_HTTP_PORT),
+        bindAddress: config.get<string>('bindAddress', DEFAULT_BIND_ADDR) || DEFAULT_BIND_ADDR,
     };
 }
 
@@ -135,6 +138,7 @@ function buildWtpResult(tid: number, wspPdu: Buffer): Buffer {
     const b0 = (WTP_PDU_RESULT << 3) | (1 << 2) | (1 << 1);
     const result = Buffer.alloc(3 + wspPdu.length);
     result[0] = b0;
+    tid ^= WTP_TID_RESPONDER_BIT;   // the Invoke's, its high bit inverted (WAP-224 §7.8.1)
     result[1] = (tid >> 8) & 0xFF;
     result[2] = tid & 0xFF;
     wspPdu.copy(result, 3);
@@ -297,7 +301,9 @@ function serveRawFile(fullPath: string): ServeResult {
 
 function compileAndServeWml(wmlPath: string): ServeResult {
     try {
-        const wmlContent = fs.readFileSync(wmlPath, 'utf-8');
+        // Read in the deck's own charset (BOM / XML declaration, WML 1.3
+        // §6.1); the WBXML is UTF-8 whatever it was (§6.1 allows transcoding)
+        const wmlContent = decodeDeck(fs.readFileSync(wmlPath)).text;
         const wmlcBuf = encodeWbxml(wmlContent);
         return { status: 200, contentType: 'application/vnd.wap.wmlc', body: wmlcBuf };
     } catch (err: any) {
@@ -308,7 +314,7 @@ function compileAndServeWml(wmlPath: string): ServeResult {
 
 function compileAndServeWmls(wmlsPath: string): ServeResult {
     try {
-        const source = fs.readFileSync(wmlsPath, 'utf-8');
+        const source = decodeDeck(fs.readFileSync(wmlsPath)).text;
         const bytecode = compileWmls(source);
         return { status: 200, contentType: 'application/vnd.wap.wmlscriptc', body: bytecode };
     } catch (err: any) {
@@ -412,8 +418,8 @@ function startConnectionlessWSP(rootDir: string, wspPort: number): void {
         vscode.window.showErrorMessage(`WAP Server CL UDP error: ${err.message}`);
     });
 
-    clSocket.bind(wspPort, BIND_ADDR, () => {
-        log(`Connectionless WSP listening on UDP ${BIND_ADDR}:${wspPort}`);
+    clSocket.bind(wspPort, bindAddr, () => {
+        log(`Connectionless WSP listening on UDP ${bindAddr}:${wspPort}`);
     });
 }
 
@@ -445,8 +451,8 @@ function startConnectionOrientedWSP(rootDir: string, wspCoPort: number): void {
         vscode.window.showErrorMessage(`WAP Server CO UDP error: ${err.message}`);
     });
 
-    coSocket.bind(wspCoPort, BIND_ADDR, () => {
-        log(`Connection-oriented WSP listening on UDP ${BIND_ADDR}:${wspCoPort}`);
+    coSocket.bind(wspCoPort, bindAddr, () => {
+        log(`Connection-oriented WSP listening on UDP ${bindAddr}:${wspCoPort}`);
     });
 }
 
@@ -554,8 +560,8 @@ function startHttpServer(rootDir: string, httpPort: number): void {
         }
     });
 
-    httpServer.listen(httpPort, BIND_ADDR, () => {
-        log(`WAP-over-HTTP listening on http://${BIND_ADDR}:${httpPort}`);
+    httpServer.listen(httpPort, bindAddr, () => {
+        log(`WAP-over-HTTP listening on http://${bindAddr}:${httpPort}`);
     });
 }
 
@@ -579,7 +585,8 @@ export function startWapServer(): void {
 
     nextSessionId = 1;
 
-    const { wspPort, wspCoPort, httpPort } = getWapServerPorts();
+    const { wspPort, wspCoPort, httpPort, bindAddress } = getWapServerPorts();
+    bindAddr = bindAddress;
 
     startConnectionlessWSP(rootDir, wspPort);
     startConnectionOrientedWSP(rootDir, wspCoPort);
@@ -588,9 +595,9 @@ export function startWapServer(): void {
     wapServerRunning = true;
 
     log(`WAP Server started — root: ${rootDir}`);
-    log(`  WSP CL (GET):  UDP ${BIND_ADDR}:${wspPort}  (compiled wmlc/wmlsc)`);
-    log(`  WSP CO (POST): UDP ${BIND_ADDR}:${wspCoPort} (compiled wmlc/wmlsc)`);
-    log(`  HTTP:          http://${BIND_ADDR}:${httpPort} (text wml/wmls)`);
+    log(`  WSP CL (GET):  UDP ${bindAddr}:${wspPort}  (compiled wmlc/wmlsc)`);
+    log(`  WSP CO (POST): UDP ${bindAddr}:${wspCoPort} (compiled wmlc/wmlsc)`);
+    log(`  HTTP:          http://${bindAddr}:${httpPort} (text wml/wmls)`);
     outputChannel?.show(true);
 
     vscode.window.showInformationMessage(

@@ -15,6 +15,11 @@
 /* global acquireVsCodeApi */
 var vscodeApi = acquireVsCodeApi();
 
+// This is a browser, not the editor preview: an unset variable renders as
+// nothing (WML 1.3 §10.3.1) rather than as wmlTransform's "[name]" authoring
+// placeholder. See updateVariables() in wml-engine.js.
+window.WML_STRICT_VARS = true;
+
 // ── State (browser-specific; wmlHistory & wmlVars are in wml-engine.js) ──
 var deckHistory = [];      // stack of {url, method, postfields} for cross-deck back
 var currentUrl = '';       // current deck URL
@@ -40,12 +45,14 @@ function doBack() {
         currentUrl = prev.url;
         // Restore how this deck was originally fetched so POST decks re-issue
         // their post data on back navigation (WAP-191 §9.2, §12.5.2).
-        currentFetch = { method: prev.method || 'get', postfields: prev.postfields || null };
+        currentFetch = { method: prev.method || 'get', postfields: prev.postfields || null,
+                         acceptCharset: prev.acceptCharset || null };
         vscodeApi.postMessage({
             type: 'navigate',
             url: prev.url,
             postfields: prev.postfields || null,
             method: prev.method || 'get',
+            acceptCharset: prev.acceptCharset || null,
         });
     }
 }
@@ -70,7 +77,7 @@ document.getElementById('url-input').addEventListener('keydown', function(e) {
 
 // ── Navigation ───────────────────────────────────────────────────
 
-function navigateToUrl(url, postfields, method, sendreferer, isLink) {
+function navigateToUrl(url, postfields, method, sendreferer, isLink, acceptCharset) {
     // Resolve relative URLs
     if (currentUrl && !url.match(/^https?:\/\//i)) {
         try {
@@ -108,11 +115,13 @@ function navigateToUrl(url, postfields, method, sendreferer, isLink) {
     // Save current deck (and how it was fetched) in deck history for back nav.
     var fromUrl = currentUrl;
     if (currentUrl) {
-        deckHistory.push({ url: currentUrl, method: currentFetch.method, postfields: currentFetch.postfields });
+        deckHistory.push({ url: currentUrl, method: currentFetch.method, postfields: currentFetch.postfields,
+                           acceptCharset: currentFetch.acceptCharset });
     }
 
     currentUrl = url;
-    currentFetch = { method: method || 'get', postfields: postfields || null };
+    currentFetch = { method: method || 'get', postfields: postfields || null,
+                     acceptCharset: acceptCharset || null };
     document.getElementById('url-input').value = url;
 
     setStatus('Loading ' + url + '...');
@@ -125,7 +134,9 @@ function navigateToUrl(url, postfields, method, sendreferer, isLink) {
         referer: sendreferer ? fromUrl : null,
         // Referring deck for deck access control — only for in-deck links, not
         // user-initiated address-bar / history navigation (WAP-191 §11.3.1).
-        fromDeck: isLink ? fromUrl : null
+        fromDeck: isLink ? fromUrl : null,
+        // <go accept-charset>: the charset postfields are sent in (§9.5.1)
+        acceptCharset: acceptCharset || null
     });
 }
 
@@ -177,7 +188,7 @@ function wmlPrevDeck() {
     doBack();
 }
 
-function wmlNavigate(href, postfields, method, sendreferer) {
+function wmlNavigate(href, postfields, method, sendreferer, acceptCharset) {
     href = substituteVars(href, true);  // %HREF context → default escape conversion
     if (href.startsWith('#')) {
         showCard(href.substring(1));
@@ -193,10 +204,10 @@ function wmlNavigate(href, postfields, method, sendreferer) {
             showCard(cardPart);
         } else {
             // Different deck: navigate then show card
-            navigateToUrl(href, postfields, method, sendreferer, true);
+            navigateToUrl(href, postfields, method, sendreferer, true, acceptCharset);
         }
     } else {
-        navigateToUrl(href, postfields, method, sendreferer, true);
+        navigateToUrl(href, postfields, method, sendreferer, true, acceptCharset);
     }
 }
 
@@ -218,6 +229,7 @@ function renderDeck(data) {
     var screen = document.getElementById('phone-screen');
     wmlHistory = [];  // reset intra-deck history
     wmlVars = data.vars || {};
+    wmlCharsetMap = data.charsetMap || null;   // $(v:escape) in the deck's charset
 
     screen.innerHTML = data.cardsHtml;
 
@@ -370,7 +382,13 @@ window.addEventListener('message', function(event) {
                     img.src = msg.dataUri;
                     img.style.visibility = 'visible';
                 } else {
-                    img.alt = '[image]';
+                    // The bitmap could not be fetched or decoded — which is
+                    // precisely when alt matters. WML 1.3 §11.9 makes alt the
+                    // image's alternative representation for exactly this case,
+                    // so the deck's own text must survive; overwriting it threw
+                    // away what the author wrote ("Company Logo") in favour of
+                    // a generic marker. Only supply one if the deck gave none.
+                    if (!img.getAttribute('alt')) { img.alt = '[image]'; }
                     img.style.visibility = 'visible';
                 }
                 delete _pendingProxies[msg.id];

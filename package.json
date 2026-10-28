@@ -2,7 +2,7 @@
   "name": "wap-toolkit",
   "displayName": "WAP Toolkit",
   "description": "Complete toolkit for WML & WMLScript authoring, preview and debugging",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "publisher": "jabezwinston",
   "license": "Apache-2.0",
   "repository": {
@@ -489,6 +489,11 @@
           "default": 3003,
           "description": "WAP-over-HTTP port for serving text WML/WMLScript files"
         },
+        "wap.bindAddress": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "description": "Address the WAP server and WML preview server listen on. The default accepts connections from this machine only; use 0.0.0.0 to let phones, emulators and other devices on the network connect."
+        },
         "wap.wml.preview.phoneFrame": {
           "type": "boolean",
           "default": true,
@@ -504,7 +509,7 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "copy-assets": "mkdir -p out/wmlRender out/browser out/shared && cp src/wmlRender/*.js src/wmlRender/*.css out/wmlRender/ && cp src/browser/*.js src/browser/*.css out/browser/ && cp src/shared/*.js src/shared/*.css out/shared/",
+    "copy-assets": "mkdir -p out/wmlRender out/browser out/shared && cp src/wmlRender/*.js src/wmlRender/*.css out/wmlRender/ && cp src/browser/*.js src/browser/*.css src/browser/*.html out/browser/ && cp src/shared/*.js src/shared/*.css out/shared/",
     "compile": "tsc -p ./ && npm run copy-assets",
     "watch": "npm run copy-assets && tsc -watch -p ./",
     "lint": "eslint src --ext ts",
