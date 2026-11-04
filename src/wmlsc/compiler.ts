@@ -12,14 +12,13 @@
  *  the WAP-193 WMLScript specification
  */
 import {
-    CompilationUnit, FunctionDeclaration, Statement, Expression,
-    AccessControlPragma, MetaPragma,
-    VariableStatement, BlockStatement, ExpressionStatement, IfStatement,
+    CompilationUnit, Statement, Expression,
+    VariableStatement, IfStatement,
     WhileStatement, ForStatement, ReturnStatement,
     AssignmentExpression, BinaryExpression, UnaryExpression,
     UpdateExpression, CallExpression, LibraryCallExpression,
     ExternalCallExpression, ConditionalExpression,
-    TypeofExpression, IsvalidExpression, CommaExpression,
+    CommaExpression,
 } from './ast';
 import {
     Opcode, ConstantType, PragmaType,
@@ -43,13 +42,6 @@ interface ConstantEntry {
     value: number | string;
 }
 
-interface FunctionInfo {
-    index: number;
-    name: string;
-    numArgs: number;
-    isExtern: boolean;
-}
-
 // Represents an unresolved jump target
 interface JumpPatch {
     instrOffset: number;    // position of the jump instruction
@@ -65,6 +57,14 @@ interface LoopContext {
 
 /** Per-function map of bytecode offset → source line, recorded at statement boundaries. */
 export interface LineMapEntry { pc: number; line: number; }
+
+/** Per-function source-level debug info, indexed like the function pool. */
+export interface DebugInfo {
+    lineMaps: LineMapEntry[][];
+    varNames: string[][];
+    /** Every function's name: the bytecode names only the extern ones (WMLScript: 9.6). */
+    funcNames: string[];
+}
 
 class FunctionCompiler {
     private code: number[] = [];
@@ -193,6 +193,7 @@ class FunctionCompiler {
         }
     }
 
+    // WMLScript: 10.5.2 Function Call Instructions
     private emitCall(funcIndex: number): void {
         if (funcIndex < 8) {
             this.emit(PACKED_CALL_S_BASE | funcIndex);
@@ -202,6 +203,7 @@ class FunctionCompiler {
         }
     }
 
+    // WMLScript: 10.5.2 Function Call Instructions
     private emitCallLib(libIndex: number, funcIndex: number, _nargs: number): void {
         // WAP-193: CALL_LIB_S packs func_id in opcode, followed by lib_id only (no nargs)
         if (funcIndex < 8) {
@@ -215,6 +217,8 @@ class FunctionCompiler {
         }
     }
 
+    // WMLScript: 10.5.1 Control Flow Instructions
+    //
     // Emit a forward jump, returns a patch entry
     // Always uses 3-byte wide form: opcode(1) + uint16(2)
     private emitJumpForward(conditional: boolean): JumpPatch {
@@ -231,6 +235,7 @@ class FunctionCompiler {
         return patch;
     }
 
+    // WMLScript: 10.5.1 Control Flow Instructions
     private emitJumpBackward(targetOffset: number, conditional: boolean): void {
         // WAP-193: backward offset = current_position - target (from instruction START)
         const here = this.code.length;
@@ -556,6 +561,11 @@ class FunctionCompiler {
         this.emitLoadVar(varIdx);
     }
 
+    // WMLScript:
+    //  - 10.5.5 Arithmetic Instructions
+    //  - 10.5.6 Bitwise Instructions
+    //  - 10.5.7 Comparison Instructions
+    //  - 10.5.8 Logical Instructions
     private compileBinaryExpression(expr: BinaryExpression): void {
         // Short-circuit operators need special handling
         // SCAND/SCOR pop TOS, then push result+signal for TJUMP.
@@ -565,6 +575,7 @@ class FunctionCompiler {
             this.emit(Opcode.SCAND);
             const skipRight = this.emitJumpForward(true);
             this.compileExpression(expr.right);
+            this.emit(Opcode.TOBOOL);   // the result is a boolean (WMLScript: 6.9)
             this.markLabel(skipRight.targetLabel);
             return;
         }
@@ -573,6 +584,7 @@ class FunctionCompiler {
             this.emit(Opcode.SCOR);
             const skipRight = this.emitJumpForward(true);
             this.compileExpression(expr.right);
+            this.emit(Opcode.TOBOOL);   // the result is a boolean (WMLScript: 6.9)
             this.markLabel(skipRight.targetLabel);
             return;
         }
@@ -610,10 +622,18 @@ class FunctionCompiler {
     }
 
     private compileUnaryExpression(expr: UnaryExpression): void {
+        // -2147483648 is minInt: a negative integer literal is folded, as
+        // 2147483648 itself is past maxInt
+        if (expr.operator === '-' && expr.operand.type === 'IntegerLiteral') {
+            this.compileIntegerLiteral(-expr.operand.value);
+            return;
+        }
         this.compileExpression(expr.operand);
         switch (expr.operator) {
             case '-': this.emit(Opcode.UMINUS); break;
-            case '+': break; // no-op
+            // +x converts by rule 5 (WMLScript: 6.9): x * true, as the instruction
+            // set has no unary plus
+            case '+': this.emit(Opcode.CONST_TRUE); this.emit(Opcode.MUL); break;
             case '~': this.emit(Opcode.B_NOT); break;
             case '!': this.emit(Opcode.NOT); break;
         }
@@ -662,6 +682,9 @@ class FunctionCompiler {
         this.emitCall(funcIdx);
     }
 
+    // WMLScript:
+    //  - 6.4.2.3 Library Functions
+    //  - 10.5.2.4 Instruction: CALL_LIB findex lindex
     private compileLibraryCall(expr: LibraryCallExpression): void {
         // Push arguments
         for (const arg of expr.arguments) {
@@ -688,6 +711,9 @@ class FunctionCompiler {
         this.emitCallLib(libId, funcIdx, nargs);
     }
 
+    // WMLScript:
+    //  - 6.4.2.2 External Functions
+    //  - 10.5.2.6 Instruction: CALL_URL urlindex findex args
     private compileExternalCall(expr: ExternalCallExpression): void {
         // Push arguments
         for (const arg of expr.arguments) {
@@ -697,7 +723,7 @@ class FunctionCompiler {
         const funcNameIndex = this.parent.addConstant(ConstantType.UTF8_STRING, expr.functionName);
         const urlIndex = this.parent.getExternalUrlIndex(expr.scriptAlias);
 
-        // WAP-193 §10.5.2.6: CALL_URL urlIndex funcIndex numArgs (all uint8)
+        // WMLScript: 10.5.2.6 Instruction: CALL_URL urlindex findex args: CALL_URL urlIndex funcIndex numArgs (all uint8)
         this.emit(Opcode.CALL_URL);
         this.emit(urlIndex & 0xFF);
         this.emit(funcNameIndex & 0xFF);
@@ -737,6 +763,7 @@ export class WmlscCompiler {
     // Per-function debug info from the most recent compileModule() call.
     private lineMaps: LineMapEntry[][] = [];
     private varNames: string[][] = [];
+    private funcNames: string[] = [];
 
     compile(source: string): Buffer {
         const parser = new Parser();
@@ -748,14 +775,20 @@ export class WmlscCompiler {
         return this.compileModule(ast);
     }
 
-    /** Compile source and also return the per-function debug info (PC↔line maps and
-     *  variable-name tables) used for source-level debugging. Bytecode is identical
-     *  to compile(). */
-    compileWithDebugInfo(source: string): { bytecode: Buffer; lineMaps: LineMapEntry[][]; varNames: string[][] } {
+    /** Compile source and also return the per-function debug info (PC↔line maps,
+     *  variable and function names) used for source-level debugging. Bytecode is
+     *  identical to compile(). */
+    compileWithDebugInfo(source: string): { bytecode: Buffer } & DebugInfo {
         const bytecode = this.compile(source);
-        return { bytecode, lineMaps: this.lineMaps, varNames: this.varNames };
+        return { bytecode, lineMaps: this.lineMaps, varNames: this.varNames, funcNames: this.funcNames };
     }
 
+    // WMLScript:
+    //  - 9.2 WMLScript Bytecode
+    //  - 9.3 Bytecode Header
+    //  - 9.4 Constant Pool
+    //  - 9.5 Pragma Pool
+    //  - 9.6 Function Pool
     compileModule(ast: CompilationUnit): Buffer {
         // Register external URLs in the constant pool
         for (const ext of ast.externalDeclarations) {
@@ -784,11 +817,14 @@ export class WmlscCompiler {
         // Expose per-function debug info for compileWithDebugInfo().
         this.lineMaps = compiledFunctions.map(f => f.lineMap);
         this.varNames = compiledFunctions.map(f => f.varNames);
+        this.funcNames = ast.functions.map(f => f.name);
 
         // Encode the bytecode module
         return this.encodeBytecodeModule(ast, compiledFunctions);
     }
 
+    // WMLScript: 9.4.1 Constants
+    //
     // Public API for FunctionCompiler to add constants
     addConstant(type: ConstantType, value: number | string): number {
         const key = `${type}:${value}`;
@@ -816,9 +852,11 @@ export class WmlscCompiler {
         return idx;
     }
 
+    // WMLScript: 9.5.1 Pragmas
+    //
     // Pre-build pragma pool entries, registering all needed constants
     private buildPragmaEntries(ast: CompilationUnit): void {
-        // Access control pragmas (§9.5.1.1)
+        // Access control pragmas (WMLScript: 9.5.1.1)
         if (ast.accessControl) {
             if (ast.accessControl.domain !== undefined) {
                 const domIdx = this.addConstant(ConstantType.UTF8_STRING, ast.accessControl.domain);
@@ -829,7 +867,7 @@ export class WmlscCompiler {
                 this.pragmaEntries.push([PragmaType.ACCESS_PATH, ...encodeMbUint32(pathIdx)]);
             }
         }
-        // Meta-information pragmas (§9.5.1.2)
+        // Meta-information pragmas (WMLScript: 9.5.1.2)
         for (const meta of ast.metaPragmas) {
             const nameIdx = this.addConstant(ConstantType.UTF8_STRING, meta.propertyName);
             const contentIdx = this.addConstant(ConstantType.UTF8_STRING, meta.content);
@@ -894,7 +932,7 @@ export class WmlscCompiler {
             }
         }
 
-        // Pragma Pool (WAP-193 §9.5) — entries pre-built by buildPragmaEntries()
+        // Pragma Pool (WMLScript: 9.5) — entries pre-built by buildPragmaEntries()
         body.push(...encodeMbUint32(this.pragmaEntries.length));
         for (const entry of this.pragmaEntries) {
             body.push(...entry);
@@ -936,8 +974,8 @@ export function compileWmls(source: string): Buffer {
     return compiler.compile(source);
 }
 
-// Convenience function — compile and also return per-function debug info (line maps + var names).
-export function compileWmlsWithDebugInfo(source: string): { bytecode: Buffer; lineMaps: LineMapEntry[][]; varNames: string[][] } {
+// Convenience function — compile and also return per-function debug info (see DebugInfo).
+export function compileWmlsWithDebugInfo(source: string): { bytecode: Buffer } & DebugInfo {
     const compiler = new WmlscCompiler();
     return compiler.compileWithDebugInfo(source);
 }

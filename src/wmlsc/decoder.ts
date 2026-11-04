@@ -80,9 +80,12 @@ class WmlscDecoder {
         this.data = data;
     }
 
+    // WMLScript:
+    //  - 9.2 WMLScript Bytecode
+    //  - 9.3 Bytecode Header
     decode(): WmlscModule {
         const version = this.readUint8();
-        const _codeSize = this.readMbUint32();
+        this.readMbUint32(); // code size
 
         const constants = this.readConstantPool();
         const pragmas = this.readPragmaPool();
@@ -98,9 +101,10 @@ class WmlscDecoder {
         return { version, constants, pragmas, functions, functionNames };
     }
 
+    // WMLScript: 9.4 Constant Pool
     private readConstantPool(): WmlscConstant[] {
         const count = this.readMbUint16();
-        // CharSet field (WAP-193 §9.1.3): a MIBenum for the type-6 strings,
+        // CharSet field (WMLScript: 9.1.3): a MIBenum for the type-6 strings,
         // 0 = unknown (then UTF-8 / ISO-8859-1, as decks with none named)
         const charset = charsetByMib(this.readMbUint32()) || 'utf-8';
         const constants: WmlscConstant[] = [];
@@ -132,7 +136,7 @@ class WmlscDecoder {
                     value = '';
                     break;
                 case ConstantType.EXT_STRING: {
-                    // §9.4.1.3.3: size and bytes only; the charset is the pool's
+                    // WMLScript: 9.4.1.3.3 Strings with External Character Encoding Definition: size and bytes only; the charset is the pool's
                     const len = this.readSize();
                     value = decodeText(this.data, charset, this.pos, this.pos + len);
                     this.pos += len;
@@ -148,6 +152,7 @@ class WmlscDecoder {
         return constants;
     }
 
+    // WMLScript: 9.5 Pragma Pool
     private readPragmaPool(): WmlscPragma[] {
         const count = this.readMbUint16();
         const pragmas: WmlscPragma[] = [];
@@ -209,7 +214,7 @@ class WmlscDecoder {
 
     // --- Primitive readers ---
 
-    /** A size of what follows: past the unit it fails verification (§11.1),
+    /** A size of what follows: past the unit it fails verification (WMLScript: 11.1),
      *  rather than being cut short (or, for a function, read on past it). */
     private checkSize(n: number): void {
         if (n > this.data.length - this.pos) {
@@ -251,6 +256,7 @@ class WmlscDecoder {
         return v;
     }
 
+    // WMLScript: 9.1.2 Multi-byte Integer Format
     private readMbUint32(): number {
         const r = decodeMbUint32(this.data, this.pos);
         this.pos += r.bytesRead;
@@ -262,9 +268,14 @@ class WmlscDecoder {
     }
 }
 
-// === Bytecode Verification (WAP-193 §11, WMLS-C-107) ===
+// === Bytecode Verification (WMLScript: 11, WMLS-C-107) ===
 
 /**
+ * WMLScript:
+ *  - 11 BYTECODE VERIFICATION
+ *  - 11.1 Integrity Check
+ *  - 11.2 Runtime Validity Checks
+ *
  * Structural integrity check of a decoded module: opcode validity, operand
  * presence, in-range constant/function indices, and in-bounds jump targets.
  * Returns a list of human-readable problems ([] ⇒ the module verifies).
@@ -274,7 +285,7 @@ export function verifyModule(mod: WmlscModule): string[] {
     const nConst = mod.constants.length;
     const nFunc = mod.functions.length;
 
-    // §11.1: a name's index must be an existing function
+    // WMLScript: 11.1 Integrity Check: a name's index must be an existing function
     for (const fn of mod.functionNames) {
         if (fn.index >= nFunc) { errors.push(`function name "${fn.name}" for function ${fn.index} ≥ ${nFunc}`); }
     }
@@ -283,7 +294,7 @@ export function verifyModule(mod: WmlscModule): string[] {
         const bc = mod.functions[fi].bytecode;
         const fname = mod.functions[fi].name ?? `function_${fi}`;
         const flag = (at: number, msg: string) => errors.push(`${fname}@${at}: ${msg}`);
-        // §11.2: a jump's target must be the start of an instruction (or the
+        // WMLScript: 11.2 Runtime Validity Checks: a jump's target must be the start of an instruction (or the
         // function's end); checked once every start is known
         const starts = new Set<number>([bc.length]);
         const jumps: Array<[number, number]> = [];
@@ -551,18 +562,13 @@ export interface DisasmLineMapEntry { pc: number; line: number; }
 /**
  * Disassemble a module to the same text `disassembleWmlsc()` produces, and also
  * return a per-function map from each instruction's bytecode offset to its 1-based
- * line in that text. The line numbers account for the full layout (version header,
- * constant pool, pragmas and per-function headers), so a breakpoint set on an
+ * line in that text. The line numbers account for the full layout (constant pool,
+ * pragmas and per-function headers), so a breakpoint set on an
  * instruction line resolves to the right program counter.
  */
 export function disassembleWithLineMap(mod: WmlscModule): { text: string; lineMaps: DisasmLineMapEntry[][] } {
     const lines: string[] = [];
     const lineMaps: DisasmLineMapEntry[][] = [];
-    const major = (mod.version >> 4) & 0x0F;
-    const minor = mod.version & 0x0F;
-
-    lines.push(`; WMLScript Bytecode v${major}.${minor}`);
-    lines.push('');
 
     // Constants
     if (mod.constants.length > 0) {

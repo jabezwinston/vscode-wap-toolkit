@@ -11,6 +11,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as zlib from 'zlib';
+import { MB_UINT_MORE, MB_UINT_BITS } from '../wbxml/tokenTable';
 
 const MAX_DIMENSION = 128;
 
@@ -412,20 +413,24 @@ function scaleDown(img: RawImage, maxDim: number): RawImage {
 
 // ===== WBMP Encoder =====
 
+// WAE Media Types: 4.3.1 Multi-byte Integer Format
 function writeMultiByte(value: number): Buffer {
     if (value === 0) { return Buffer.from([0]); }
     const bytes: number[] = [];
     let v = value;
     while (v > 0) {
-        bytes.unshift(v & 0x7F);
+        bytes.unshift(v & MB_UINT_BITS);
         v >>= 7;
     }
     for (let i = 0; i < bytes.length - 1; i++) {
-        bytes[i] |= 0x80;
+        bytes[i] |= MB_UINT_MORE;
     }
     return Buffer.from(bytes);
 }
 
+// WAE Media Types:
+//  - 4.4 Header Data Structure
+//  - 4.5.1 WBMP Type 0: B/W, Uncompressed Bitmap
 function encodeToWbmp(image: RawImage, threshold: number = 128): Buffer {
     const parts: Buffer[] = [];
 

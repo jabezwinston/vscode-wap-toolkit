@@ -248,6 +248,8 @@ var __wmls = (function() {
 
   rt._callFunction = async function(scriptPath, funcName, args) {
     rt._pending = null;
+    rt._newCtx = false;
+    rt._unit = scriptPath;
     rt._dbg._terminate = false;
     rt._dbg.stack = [];
     rt._dbg.mode = 'run';
@@ -261,9 +263,9 @@ var __wmls = (function() {
     } catch(e) {
       if (e && e.__wmlsExit) { /* normal Lang.exit() */ }
       else if (e && e.__wmlsTerminate) { rt._dbg.log('Execution stopped by debugger'); }
-      else if (e && e.__wmlsAbort) { rt._dbg.log('aborted: ' + e.reason); console.error('WMLScript aborted: ' + e.reason); }
-      else if (e && e.__wmlsNav) { /* navigation via WMLBrowser.go/prev */ }
-      else { rt._dbg.log('runtime error: ' + e); console.error('WMLScript runtime error:', e); }
+      // a fatal error (Lang.abort too) cancels a pending go() or prev()
+      else if (e && e.__wmlsAbort) { rt._pending = null; rt._dbg.log('aborted: ' + e.reason); console.error('WMLScript aborted: ' + e.reason); }
+      else { rt._pending = null; rt._dbg.log('runtime error: ' + e); console.error('WMLScript runtime error:', e); }
     } finally {
       rt._dbg.paused = false;
       rt._dbg.resume = null;
@@ -288,16 +290,143 @@ var __wmls = (function() {
 
   // --- Type Helpers ---
 
-  rt.div = function(a, b) {
-    if (a === undefined || b === undefined || b === 0) return undefined;
-    return Math.trunc(a / b);
+  // --- Operators (WMLScript: 6.3, 6.9, 12.4), as the bytecode VM's ---
+  // The preview's values are JS values (undefined is invalid), so a number
+  // is an integer when it is integral and within 32 bits: a float with an
+  // integral value counts as an integer here (the VM keeps the types).
+
+  var _F32 = new Float32Array(1);
+  // WMLScript: 6.2.7.2 Floating-point Size
+  function _f32(n) { _F32[0] = n; return _F32[0]; }
+  function _isInt(n) { return n % 1 === 0 && n >= -2147483648 && n <= 2147483647; }
+  function _int(n) { return _isInt(n) ? n | 0 : undefined; }       // past 32 bits: invalid
+  function _flt(n) { var f = _f32(n); return isFinite(f) ? f : undefined; }   // single precision
+  var _NUM = /^[ \t\n\v\f\r]*([+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)[ \t\n\v\f\r]*$/;
+  // WMLScript: 6.9 Operator Data Type Conversion Rules
+  //
+  // Rule 5: an integer or float, or undefined (a string by the WMLScript: 7.4 grammar)
+  function _num(v) {
+    if (typeof v === 'number') return v;
+    if (typeof v === 'boolean') return v ? 1 : 0;
+    if (typeof v !== 'string') return undefined;
+    var m = _NUM.exec(v);
+    if (!m) return undefined;
+    var n = Number(m[1]);
+    return /[.eE]/.test(m[1]) || !_isInt(n) ? _flt(n) : n;
+  }
+  // WMLScript: 6.8.2 Conversions to String
+  //
+  // C's %.*g, and the shortest of 6 to 9 digits that is the same float (WMLScript: 6.8.2)
+  function _fmtG(x, p) {
+    if (x === 0) return 1 / x < 0 ? '-0' : '0';
+    var parts = x.toExponential(p - 1).split('e'), e = Number(parts[1]), m = parts[0];
+    if (e < -4 || e >= p) {
+      if (m.indexOf('.') >= 0) m = m.replace(/\.?0+$/, '');
+      return m + 'e' + (e < 0 ? '-' : '+') + (Math.abs(e) < 10 ? '0' : '') + Math.abs(e);
+    }
+    var t = x.toFixed(p - 1 - e);
+    return t.indexOf('.') >= 0 ? t.replace(/\.?0+$/, '') : t;
+  }
+  function _fmtFloat(f) {
+    f = _f32(f);
+    for (var p = 6; ; p++) {
+      var t = _fmtG(f, p);
+      if (p >= 9 || _f32(Number(t)) === f) return t;
+    }
+  }
+  // A value as a string (WMLScript: 6.8.2)
+  rt.str = function(v) {
+    if (v === undefined) return 'invalid';
+    if (v === true) return 'true';
+    if (v === false) return 'false';
+    if (typeof v === 'number') return _isInt(v) ? String(v) : _fmtFloat(v);
+    return String(v);
+  };
+  // A value as a boolean, undefined for invalid (WMLScript: 6.8.5)
+  rt.bool = function(v) {
+    if (v === undefined || v === null) return undefined;
+    if (typeof v === 'boolean') return v;
+    if (typeof v === 'number') return v !== 0;
+    return String(v).length > 0;
+  };
+  function _order(op, c) {
+    switch (op) {
+      case '==': return c === 0;
+      case '!=': return c !== 0;
+      case '<': return c < 0;
+      case '<=': return c <= 0;
+      case '>': return c > 0;
+      default: return c >= 0;
+    }
+  }
+  var _CMP = { '==': 1, '!=': 1, '<': 1, '<=': 1, '>': 1, '>=': 1 };
+  var _INT_ONLY = { 'div': 1, '%': 1, '&': 1, '|': 1, '^': 1, '<<': 1, '>>': 1, '>>>': 1 };
+  // A binary operator: an invalid operand gives invalid; + and the
+  // comparisons work on strings when either operand is one (rule 7); else
+  // both convert by rule 5, the integer-only operators refuse a float, /
+  // is a float, an integer result past 32 bits is invalid
+  rt.op = function(op, a, b) {
+    if (a === undefined || b === undefined) return undefined;
+    if ((_CMP[op] || op === '+') && (typeof a === 'string' || typeof b === 'string')) {
+      var sa = rt.str(a), sb = rt.str(b);
+      return op === '+' ? sa + sb : _order(op, sa < sb ? -1 : sa > sb ? 1 : 0);
+    }
+    var x = _num(a), y = _num(b);
+    if (x === undefined || y === undefined) return undefined;
+    var fl = !_isInt(x) || !_isInt(y);
+    if (_INT_ONLY[op] && fl) return undefined;
+    if (_CMP[op]) return _order(op, x < y ? -1 : x > y ? 1 : 0);
+    if (fl || op === '/') {
+      if (op === '+') return _flt(x + y);
+      if (op === '-') return _flt(x - y);
+      if (op === '*') return _flt(x * y);
+      return y === 0 ? undefined : _flt(x / y);
+    }
+    switch (op) {
+      case '+': return _int(x + y);
+      case '-': return _int(x - y);
+      case '*': return _int(x * y);
+      case 'div': return y === 0 ? undefined : _int(Math.trunc(x / y));
+      case '%': return y === 0 ? undefined : y === -1 ? 0 : x % y;
+      case '&': return x & y;
+      case '|': return x | y;
+      case '^': return x ^ y;
+      case '<<': return x << y;
+      case '>>': return x >> y;
+      default: return (x >>> y) | 0;
+    }
+  };
+  rt.div = function(a, b) { return rt.op('div', a, b); };
+  // Unary +, -, ~, ! and ++/-- (rule 5; ~ integers only)
+  rt.plus = function(v) { return _num(v); };
+  rt.neg = function(v) {
+    var x = _num(v);
+    return x === undefined ? undefined : _isInt(x) ? _int(-x) : _flt(-x);
+  };
+  rt.bnot = function(v) { var x = _num(v); return x !== undefined && _isInt(x) ? ~x : undefined; };
+  rt.not = function(v) { var b = rt.bool(v); return b === undefined ? undefined : !b; };
+  rt.inc = function(v, d) {
+    var x = _num(v);
+    return x === undefined ? undefined : _isInt(x) ? _int(x + d) : _flt(x + d);
+  };
+  rt.post = function(old) { return old; };     // x++: the old value, then the store
+  // && and ||: short-circuit, a boolean or invalid (WMLScript: 6.3.3, 6.9)
+  rt.and = async function(a, right) {
+    var x = rt.bool(a);
+    if (x !== true) return x;
+    return rt.bool(await right());
+  };
+  rt.or = async function(a, right) {
+    var x = rt.bool(a);
+    if (x !== false) return x;
+    return rt.bool(await right());
   };
 
   rt.typeOf = function(v) {
     if (v === undefined) return 4;     // invalid
     if (typeof v === 'boolean') return 3;
     if (typeof v === 'string') return 2;
-    if (typeof v === 'number') return Number.isInteger(v) ? 0 : 1;
+    if (typeof v === 'number') return _isInt(v) ? 0 : 1;
     return 4;
   };
 
@@ -308,6 +437,9 @@ var __wmls = (function() {
     return isNaN(n) ? null : Math.trunc(n);
   }
 
+  // WMLScript Libraries: 10 URL
+  // RFC 3986: 3 Syntax Components
+  //
   // RFC2396 URL split — never throws, supports relative URLs (not resolved)
   function _parseUrl(u) {
     var m = /^(?:([a-zA-Z][a-zA-Z0-9+.-]*):)?(?:\/\/([^/?#]*))?([^?#]*)(?:\?([^#]*))?(?:#(.*))?$/.exec(u) || [];
@@ -322,6 +454,7 @@ var __wmls = (function() {
     return { scheme: m[1] || '', host: host, port: port, path: m[3] || '',
              query: m[4] === undefined ? '' : m[4], fragment: m[5] === undefined ? '' : m[5] };
   }
+  // WMLScript Libraries: 10.1 isValid
   function _isValidUrl(u) { return !/[\x00-\x20\x7f-￿<>"{}|\\^`]/.test(u); }
   function _stripPathParams(p) {
     return p.split('/').map(function(seg) { var i = seg.indexOf(';'); return i >= 0 ? seg.slice(0, i) : seg; }).join('/');
@@ -331,6 +464,7 @@ var __wmls = (function() {
     return i >= 0 ? last.slice(i + 1) : '';
   }
   var _URL_SAFE = /[A-Za-z0-9\-_.!~*'()]/;
+  // WMLScript Libraries: 10.12 escapeString
   function _escapeUrl(s) {
     var out = '';
     for (var i = 0; i < s.length; i++) {
@@ -340,12 +474,13 @@ var __wmls = (function() {
     }
     return out;
   }
+  // WMLScript Libraries: 10.13 unescapeString
   function _unescapeUrl(s) {
     if (/[^\x00-\x7f]/.test(s)) return undefined;
     return s.replace(/%([0-9a-fA-F]{2})/g, function(_m, h) { return String.fromCharCode(parseInt(h, 16)); });
   }
 
-  // String.format (§9.16)
+  // String.format (WMLScript Libraries: 9.16)
   function _intForFmt(v) {
     if (typeof v === 'string') { var m = /^[+-]?[0-9]+/.exec(v.trim()); return m ? parseInt(m[0], 10) : null; }
     var n = Number(v); return isNaN(n) ? null : Math.trunc(n);
@@ -370,6 +505,7 @@ var __wmls = (function() {
     if (w !== undefined && !(prec !== undefined && w > prec)) { str = _padLeft(str, w); }
     return str;
   }
+  // WMLScript Libraries: 9.16 format
   function _format(fmt, value) {
     var result = '', firstDone = false, i = 0;
     while (i < fmt.length) {
@@ -391,6 +527,9 @@ var __wmls = (function() {
 
   // Lang.seed/random — Park–Miller LCG state (null ⇒ use Math.random)
   rt._rngState = null;
+  // WMLScript Libraries:
+  //  - 7.13 random
+  //  - 7.14 seed
   function _rngNext() {
     if (rt._rngState === null) { return Math.random(); }
     rt._rngState = (rt._rngState * 16807) % 2147483647;
@@ -402,8 +541,8 @@ var __wmls = (function() {
   // ===================================================================
   rt.Lang = {
     abs: function(v) {
-      if (v === undefined) return undefined;
-      return Math.abs(v);
+      var x = _num(v);
+      return x === undefined ? undefined : _isInt(x) ? _int(Math.abs(x)) : _flt(Math.abs(x));
     },
     min: function(a, b) {
       if (a === undefined || b === undefined) return undefined;
@@ -415,11 +554,11 @@ var __wmls = (function() {
     },
     parseInt: function(s) {
       var n = parseInt(String(s), 10);
-      return isNaN(n) ? undefined : n;
+      return isNaN(n) ? undefined : _int(n);      // past 32 bits: invalid
     },
     parseFloat: function(s) {
       var n = parseFloat(String(s));
-      return isNaN(n) ? undefined : n;
+      return isNaN(n) ? undefined : _flt(n);      // past the float range: invalid
     },
     isInt: function(v) {
       if (typeof v !== 'string') return false;
@@ -466,34 +605,20 @@ var __wmls = (function() {
   // ===================================================================
   // Float Library (1) — WAP-194 Section 9
   // ===================================================================
+  // An integer result past 32 bits, a float past the float range: invalid
+  function _fnum(v, f) { var x = _num(v); return x === undefined ? undefined : _int(f(x)); }
   rt.Float = {
-    int: function(v) {
-      if (v === undefined) return undefined;
-      var n = Number(v);
-      return isNaN(n) ? undefined : Math.trunc(n);
-    },
-    floor: function(v) {
-      if (v === undefined) return undefined;
-      var n = Number(v);
-      return isNaN(n) ? undefined : Math.floor(n);
-    },
-    ceil: function(v) {
-      if (v === undefined) return undefined;
-      var n = Number(v);
-      return isNaN(n) ? undefined : Math.ceil(n);
-    },
+    int: function(v) { return _fnum(v, Math.trunc); },
+    floor: function(v) { return _fnum(v, Math.floor); },
+    ceil: function(v) { return _fnum(v, Math.ceil); },
     pow: function(base, exp) {
-      if (base === undefined || exp === undefined) return undefined;
-      return Math.pow(base, exp);
+      var x = _num(base), y = _num(exp);
+      return x === undefined || y === undefined ? undefined : _flt(Math.pow(x, y));
     },
-    round: function(v) {
-      if (v === undefined) return undefined;
-      var n = Number(v);
-      return isNaN(n) ? undefined : Math.round(n);
-    },
+    round: function(v) { return _fnum(v, Math.round); },
     sqrt: function(v) {
-      if (v === undefined || v < 0) return undefined;
-      return Math.sqrt(v);
+      var x = _num(v);
+      return x === undefined || x < 0 ? undefined : _flt(Math.sqrt(x));
     },
     maxFloat: function() { return 3.4028235e+38; },
     minFloat: function() { return 1.17549435e-38; }
@@ -588,12 +713,7 @@ var __wmls = (function() {
       var sb = String(b === undefined ? '' : b);
       return sa < sb ? -1 : sa > sb ? 1 : 0;
     },
-    toString: function(v) {
-      if (v === undefined) return 'invalid';
-      if (v === true) return 'true';
-      if (v === false) return 'false';
-      return String(v);
-    },
+    toString: function(v) { return rt.str(v); },
     format: function(fmt, val) {
       return _format(String(fmt === undefined ? '' : fmt), val);
     }
@@ -625,7 +745,7 @@ var __wmls = (function() {
     escapeString: function(s) { return _escapeUrl(String(s === undefined ? '' : s)); },
     unescapeString: function(s) { return _unescapeUrl(String(s === undefined ? '' : s)); },
     loadString: function(url, contentType) {
-      // §10.14. The runtime cannot block on a network fetch; a host may provide
+      // WMLScript Libraries: 10.14 loadString. The runtime cannot block on a network fetch; a host may provide
       // content synchronously via rt.onLoadString (kept in sync with the VM's
       // ctx.onLoadString in stdlib.ts). Absent/unavailable/bad type ⇒ invalid.
       var ct = String(contentType === undefined ? '' : contentType);
@@ -643,21 +763,26 @@ var __wmls = (function() {
   rt.WMLBrowser = {
     getVar: function(name) {
       var n = String(name);
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(n)) return undefined;   // not a WML name (WMLScript Libraries: 11.1)
       return (typeof wmlVars !== 'undefined' && wmlVars[n] !== undefined) ? wmlVars[n] : "";
     },
     setVar: function(name, value) {
       var n = String(name);
-      var v = String(value === undefined ? '' : value);
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(n)) return undefined;   // (WMLScript Libraries: 11.2)
+      var v = value === undefined ? '' : rt.str(value);
       if (typeof wmlVars !== 'undefined') wmlVars[n] = v;
       return true;
     },
+    // go() and prev() return "" and the script goes on; the last of them
+    // stays in effect, go("") cancels both (WMLScript Libraries: 11.3-11.4)
     go: function(url) {
-      rt._pending = { type: 'go', url: String(url) };
-      throw { __wmlsNav: true };
+      var u = rt.str(url);
+      rt._pending = u === '' ? null : { type: 'go', url: u };
+      return "";
     },
     prev: function() {
-      rt._pending = { type: 'prev' };
-      throw { __wmlsNav: true };
+      if (!rt._newCtx) rt._pending = { type: 'prev' };    // none after newContext() (WMLScript Libraries: 11.5)
+      return "";
     },
     newContext: function() {
       if (typeof wmlVars !== 'undefined') {
@@ -666,12 +791,22 @@ var __wmls = (function() {
         }
       }
       if (typeof wmlHistory !== 'undefined') wmlHistory.length = 0;
+      if (rt._pending && rt._pending.type === 'prev') rt._pending = null;
+      rt._newCtx = true;
       return "";
     },
+    // deck#card, relative when the deck is in the unit's directory (WMLScript Libraries: 11.6)
     getCurrentCard: function() {
-      if (typeof document === 'undefined') return '';
+      if (typeof document === 'undefined' || typeof location === 'undefined') return undefined;
       var c = document.querySelector('.wml-card[style*="display: block"], .wml-card[style*="display:block"]');
-      return c ? c.id : '';
+      var deck = String(location.href).split('#')[0];
+      if (!deck) return undefined;
+      var abs = deck + (c && c.id ? '#' + c.id : '');
+      var unit = String(rt._unit || '');
+      try { unit = new URL(unit, deck).toString(); } catch (e) { /* as it is */ }
+      var dir = unit.slice(0, unit.lastIndexOf('/') + 1);
+      var rest = dir && abs.indexOf(dir) === 0 ? abs.slice(dir.length) : '';
+      return rest && rest.split(/[?#]/)[0].indexOf('/') < 0 ? rest : abs;
     },
     refresh: function() {
       if (typeof updateVariables === 'function') updateVariables();
@@ -687,6 +822,7 @@ var __wmls = (function() {
   // transpiler emits `await` for Dialogs calls (see wmlsToJs.ts). When the
   // shared modal is absent, wmlShowDialog falls back to native dialogs.
   // ===================================================================
+  // WMLScript Libraries: 12 DIALOGS
   function _wmlsDialog(type, msg, opts) {
     if (typeof wmlShowDialog === 'function') {
       return wmlShowDialog(type, msg, opts);
@@ -716,13 +852,13 @@ var __wmls = (function() {
   // ===================================================================
   rt.Console = {
     print: function(v) {
-      var s = v === undefined ? 'invalid' : String(v);
+      var s = rt.str(v);
       rt._dbg.log(s);
       console.log(s);
       return "";
     },
     println: function(v) {
-      var s = v === undefined ? 'invalid' : String(v);
+      var s = rt.str(v);
       rt._dbg.log(s);
       console.log(s);
       return "";

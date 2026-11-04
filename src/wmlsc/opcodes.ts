@@ -21,6 +21,8 @@ export const WMLSC_VERSION_1_1 = 0x01;   // WAP-193 version 1.1
 // Character set constant for UTF-8
 export const WMLSC_CHARSET_UTF8 = 0x6A;
 
+// WMLScript: 9.4.1 Constants
+//
 // Constant pool entry types
 export enum ConstantType {
     INT_8           = 0,
@@ -32,6 +34,8 @@ export enum ConstantType {
     EXT_STRING      = 6,
 }
 
+// WMLScript: 9.5.1 Pragmas
+//
 // Pragma types
 export enum PragmaType {
     ACCESS_DOMAIN           = 0,
@@ -41,6 +45,7 @@ export enum PragmaType {
 }
 
 // === Primary Opcodes (0x01-0x1F) and Operator Opcodes (0x20-0x3C) ===
+// WMLScript: 10.5 Instructions
 export const enum Opcode {
     // Jump instructions
     JUMP_FW         = 0x01,     // uint8 offset
@@ -165,6 +170,7 @@ export const PACKED_LOAD_VAR_S_BASE    = 0xE0;  // 0xE0-0xFF: var_index = opcode
 export const PACKED_LOAD_VAR_S_MASK    = 0x1F;
 
 // === Standard Library IDs ===
+// WMLScript: 6.6.1 Standard Libraries
 export enum StdLibrary {
     Lang        = 0,
     Float       = 1,
@@ -213,6 +219,7 @@ export const STDLIB_NAME_TO_ID: Record<string, number> = {
 };
 
 // === WMLScript Type IDs (returned by typeof) ===
+// WMLScript: 6.2.4 Variable Type
 export enum WmlsType {
     Integer = 0,
     Float   = 1,

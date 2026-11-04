@@ -77,6 +77,7 @@ function extractNameValuePairs(content: string, tagName: string): Array<{name: s
     return items;
 }
 
+// WML 1.3: 9.4 The Setvar Element
 export function extractSetvars(content: string): Array<{name: string, value: string}> {
     return extractNameValuePairs(content, 'setvar');
 }
@@ -86,6 +87,7 @@ export function setvarsToAttr(setvars: Array<{name: string, value: string}>): st
     return ` data-setvars="${escapeHtml(JSON.stringify(decodePairs(setvars)))}"`;
 }
 
+// WML 1.3: 9.3 The Postfield Element
 export function extractPostfields(content: string): Array<{name: string, value: string}> {
     return extractNameValuePairs(content, 'postfield');
 }
@@ -95,22 +97,29 @@ export function postfieldsToAttr(postfields: Array<{name: string, value: string}
     return ` data-postfields="${escapeHtml(JSON.stringify(decodePairs(postfields)))}"`;
 }
 
+// WML 1.3: 9.5.1 The Go Element
 export function methodToAttr(attrs: string): string {
     const method = getAttr(attrs, 'method');
-    // accept-charset rides with the method: both shape the request (§9.5.1)
+    // accept-charset and cache-control ride with the method: they shape
+    // the request too (WML 1.3: 9.5.1)
     const cs = getAttr(attrs, 'accept-charset');
-    const csAttr = cs ? ` data-accept-charset="${escapeAttr(cs)}"` : '';
+    const cc = getAttr(attrs, 'cache-control');
+    const csAttr = (cs ? ` data-accept-charset="${escapeAttr(cs)}"` : '') +
+        (cc ? ` data-cache-control="${escapeAttr(cc)}"` : '');
     if (!method) { return csAttr; }
     return ` data-method="${escapeAttr(method)}"${csAttr}`;
 }
 
-/** Emit data-sendreferer when a <go sendreferer="true"> requests it (WAP-191 §9.5.1). */
+/** WML 1.3: 9.5.1 The Go Element
+ *
+ * Emit data-sendreferer when a <go sendreferer="true"> requests it (WML 1.3: 9.5.1). */
 export function sendrefererToAttr(attrs: string): string {
     return getAttr(attrs, 'sendreferer') === 'true' ? ' data-sendreferer="true"' : '';
 }
 
 // ── WML format mask helpers ──────────────────────────────────────
 
+// WML 1.3: 11.6.3 The Input Element
 export function wmlFormatToPattern(format: string): string {
     if (!format) { return ''; }
     const parsed = parseWmlFormatMask(format);
@@ -150,8 +159,8 @@ export function wmlFormatToPattern(format: string): string {
             i++;
         }
         if (i < format.length && codeToRegex[format[i]]) {
-            const n = count ? parseInt(count, 10) : 1;
-            pattern += (codeToRegex[format[i]] || '.') + `{${n}}`;
+            // nf: up to n (WML 1.3: 11.6.3); a code alone: one
+            pattern += (codeToRegex[format[i]] || '.') + (count ? `{0,${count}}` : '');
             i++;
         } else {
             i++;
@@ -160,6 +169,7 @@ export function wmlFormatToPattern(format: string): string {
     return pattern;
 }
 
+// WML 1.3: 11.6.3 The Input Element
 export function wmlFormatMaxLength(format: string): number {
     if (!format) { return 0; }
     const parsed = parseWmlFormatMask(format);
@@ -169,6 +179,7 @@ export function wmlFormatMaxLength(format: string): number {
 
 // ── Card / Template parsing ──────────────────────────────────────
 
+// WML 1.3: 11.5 The Card Element
 export function parseCards(wml: string): WmlCard[] {
     const cards: WmlCard[] = [];
     const cardRegex = /<card\s+([^>]*)>([\s\S]*?)<\/card>/gi;
@@ -190,6 +201,7 @@ export function parseCards(wml: string): WmlCard[] {
     return cards;
 }
 
+// WML 1.3: 11.4 The Template Element
 export function parseTemplateInfo(wml: string): TemplateInfo {
     const templateMatch = wml.match(/<template([^>]*)>([\s\S]*?)<\/template>/i);
     if (!templateMatch) {
@@ -217,28 +229,30 @@ export function parseTemplateInfo(wml: string): TemplateInfo {
     return result;
 }
 
+// WML 1.3:
+//  - 11.4 The Template Element
+//  - 9.6 Card/Deck Task Shadowing
 export function mergeTemplate(cardBody: string, card: WmlCard, tmpl: TemplateInfo): { body: string; card: WmlCard } {
     if (tmpl.doElements.length === 0 && tmpl.oneventElements.length === 0 &&
         !tmpl.onenterforward && !tmpl.onenterbackward && !tmpl.ontimer) {
         return { body: cardBody, card };
     }
+    // A card do shadows the template do with the same name, a do's name
+    // defaulting to its type (WML 1.3: 9.6, 9.7)
     const cardDoNames = new Set<string>();
-    const cardDoTypes = new Set<string>();
     const doRegex = /<do\s+([^>]*)>/gi;
     let m;
     while ((m = doRegex.exec(cardBody)) !== null) {
-        const name = getAttr(m[1], 'name');
-        const type = getAttr(m[1], 'type');
+        const name = getAttr(m[1], 'name') || getAttr(m[1], 'type');
         if (name) { cardDoNames.add(name); }
-        if (type) { cardDoTypes.add(type); }
     }
     const cardEventTypes = new Set<string>();
     const eventRegex = /<onevent\s+[^>]*type="([^"]*)"/gi;
     while ((m = eventRegex.exec(cardBody)) !== null) { cardEventTypes.add(m[1]); }
     let appended = '';
     for (const tdo of tmpl.doElements) {
-        if (tdo.name && cardDoNames.has(tdo.name)) { continue; }
-        if (!tdo.name && tdo.type && cardDoTypes.has(tdo.type)) { continue; }
+        const name = tdo.name || tdo.type;
+        if (name && cardDoNames.has(name)) { continue; }
         appended += tdo.raw;
     }
     for (const tev of tmpl.oneventElements) {
@@ -254,6 +268,21 @@ export function mergeTemplate(cardBody: string, card: WmlCard, tmpl: TemplateInf
 
 // ── Main WML body → HTML transformation ──────────────────────────
 
+/**
+ * WML 1.3: 10.3.1 Variable Substitution
+ *
+ * A variable conversion's name (WML 1.3: 10.3.1): noesc, escape or unesc, and the
+ * deprecated forms the same (any case, or the first letter alone: a
+ * prefix is taken, as wap-browser-c); undefined for none or another.
+ */
+export function convName(c: string | undefined): string | undefined {
+    const lc = (c || '').toLowerCase();
+    return lc ? ['noesc', 'escape', 'unesc'].find((w) => w.startsWith(lc)) : undefined;
+}
+
+// WML 1.3:
+//  - 11 The Structure of WML Decks
+//  - 11.8 Text
 export function transformWmlBody(body: string, resolveImage: ImageResolver): string {
     let html = body;
 
@@ -287,7 +316,9 @@ export function transformWmlBody(body: string, resolveImage: ImageResolver): str
     // Timer -> hidden data
     html = html.replace(/<timer\s+([^>]*?)\/>/gi, (_, attrs) => {
         const value = getAttr(attrs, 'value') || '0';
-        return `<div class="wml-timer" data-value="${escapeAttr(value)}" style="display:none"></div>`;
+        const name = getAttr(attrs, 'name');
+        const nameAttr = name ? ` data-name="${escapeAttr(name)}"` : '';
+        return `<div class="wml-timer"${nameAttr} data-value="${escapeAttr(value)}" style="display:none"></div>`;
     });
 
     // do elements -> buttons
@@ -320,10 +351,6 @@ export function transformWmlBody(body: string, resolveImage: ImageResolver): str
             return `<button class="wml-do wml-do-${escapeAttr(type)}" data-type="${escapeAttr(type)}" data-action="refresh"${setvarsToAttr(setvars)}>${escapeAttr(label)}</button>`;
         });
 
-    // setvar (standalone ones not inside go/prev/refresh tasks)
-    html = html.replace(/<setvar\s+name="([^"]*)"\s+value="([^"]*)"\s*\/>/gi,
-        '<div class="wml-setvar" data-name="$1" data-value="$2" style="display:none"></div>');
-
     // go elements within anchors -> data-href nav (extract setvars and postfields from go content)
     // Handles both: <anchor>text<go.../></anchor> and <anchor><go.../>text</anchor>
     html = html.replace(/<anchor([^>]*)>([\s\S]*?)<\/anchor>/gi,
@@ -351,7 +378,7 @@ export function transformWmlBody(body: string, resolveImage: ImageResolver): str
     // anchor with prev task - handles both text orderings
     html = html.replace(/<anchor([^>]*)>([\s\S]*?)<\/anchor>/gi,
         (match, attrs, content) => {
-            const prevMatch = content.match(/<prev(?:\s*\/?>|>([\s\S]*?)<\/prev>)/i);
+            const prevMatch = content.match(/<prev(?:\s*\/>|>([\s\S]*?)<\/prev>)/i);
             if (!prevMatch) { return match; } // Not a prev anchor, skip
             
             const prevContent = prevMatch[1] || '';
@@ -381,6 +408,11 @@ export function transformWmlBody(body: string, resolveImage: ImageResolver): str
             const setvars = extractSetvars(refreshContent);
             return `<a class="wml-anchor ${escapeAttr(cls)}" data-accesskey="${accesskey}" data-action="refresh"${setvarsToAttr(setvars)}>${cleanText}</a>`;
         });
+
+    // setvar (standalone ones not inside go/prev/refresh tasks).  After the
+    // anchors: an anchor's task keeps its setvars (WML 1.3: 9.8, 10.3.4)
+    html = html.replace(/<setvar\s+name="([^"]*)"\s+value="([^"]*)"\s*\/>/gi,
+        '<div class="wml-setvar" data-name="$1" data-value="$2" style="display:none"></div>');
 
     // <a href="..."> (skip already-processed wml-anchor/wml-link elements)
     html = html.replace(/<a\s+([^>]*)>([\s\S]*?)<\/a>/gi,
@@ -465,7 +497,7 @@ export function transformWmlBody(body: string, resolveImage: ImageResolver): str
         '<optgroup label="$1">');
 
     // p element with align/mode attributes
-    html = html.replace(/<p(?:\s+([^>]*))?>/gi, (match, attrs) => {
+    html = html.replace(/<p(?:\s+([^>]*))?>/gi, (_, attrs) => {
         if (!attrs) { return '<p class="wml-p">'; }
         const align = getAttr(attrs, 'align');
         const mode = getAttr(attrs, 'mode');
@@ -481,7 +513,9 @@ export function transformWmlBody(body: string, resolveImage: ImageResolver): str
         const alt = getAttr(attrs, 'alt') || '';
         const width = getAttr(attrs, 'width') || '';
         const height = getAttr(attrs, 'height') || '';
-        const resolvedSrc = resolveImage(src);
+        // src is a URL (WML 1.3: 11.9): the resolvers escape it, so its
+        // references are resolved first, or &amp; is sent as "&amp;"
+        const resolvedSrc = resolveImage(decodeEntities(src));
         return `<img src="${resolvedSrc}" alt="${escapeAttr(alt)}" class="wml-img"${width ? ` width="${width}"` : ''}${height ? ` height="${height}"` : ''}>`;
     });
 
@@ -490,24 +524,25 @@ export function transformWmlBody(body: string, resolveImage: ImageResolver): str
 
     // WML variables: $(var) or $var -> span placeholders.
     // The conversion is captured, not just matched: $(x:escape) must URL-encode
-    // the value and $(x:unesc) must URL-decode it (WML 1.3 §10.3.1). Discarding
+    // the value and $(x:unesc) must URL-decode it (WML 1.3: 10.3.1). Discarding
     // it here left updateVariables() with no way to tell the three apart, so
     // every form rendered the raw value and :escape/:unesc did nothing at all.
-    html = html.replace(/(<[^>]+>)|\$\(([A-Za-z_][A-Za-z0-9_]*)(?::(escape|noesc|unesc))?\)/g,
-        (match, tag, varName, conversion) => {
+    html = html.replace(/(<[^>]+>)|\$\(([A-Za-z_][A-Za-z0-9_]*)(?::([A-Za-z]*))?\)/g,
+        (_, tag, varName, conversion) => {
             if (tag) { return tag; }
-            const conv = conversion ? ` data-conv="${conversion}"` : '';
+            const name = convName(conversion);
+            const conv = name ? ` data-conv="${name}"` : '';
             return `<span class="wml-var" data-var="${varName}"${conv}>[${varName}]</span>`;
         });
     html = html.replace(/(<[^>]+>)|\$([A-Za-z_][A-Za-z0-9_]*)/g,
-        (match, tag, varName) => {
+        (_, tag, varName) => {
             if (tag) { return tag; }
             return `<span class="wml-var" data-var="${varName}">[${varName}]</span>`;
         });
 
     // $$ -> literal dollar sign (must come after variable substitution)
     html = html.replace(/(<[^>]+>)|\$\$/g,
-        (match, tag) => {
+        (_, tag) => {
             if (tag) { return tag; }
             return '$';
         });

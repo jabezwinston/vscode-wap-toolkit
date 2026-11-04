@@ -64,7 +64,7 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.window.registerCustomEditorProvider(
             WbmpEditorProvider.viewType,
-            new WbmpEditorProvider(context),
+            new WbmpEditorProvider(),
             { webviewOptions: { retainContextWhenHidden: true } }
         )
     );
@@ -73,7 +73,7 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.window.registerCustomEditorProvider(
             WbxmlEditorProvider.viewType,
-            new WbxmlEditorProvider(context),
+            new WbxmlEditorProvider(),
             { webviewOptions: { retainContextWhenHidden: false } }
         )
     );
@@ -321,7 +321,10 @@ export function activate(context: vscode.ExtensionContext) {
                 }
 
                 const vm = new WmlsVM(mod);
-                const result = vm.callFunction(funcName, []);
+                // Run from the editor: each parameter is "" (a call from a
+                // deck must pass exactly the function's arguments)
+                const fn = mod.functions.find((f) => f.name === funcName);
+                const result = vm.callFunction(funcName, new Array(fn?.numArgs ?? 0).fill(mkString('')));
 
                 const channel = vscode.window.createOutputChannel('WMLScript');
                 channel.show(true);

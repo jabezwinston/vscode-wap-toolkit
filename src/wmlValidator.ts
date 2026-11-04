@@ -70,10 +70,10 @@ interface AttrDef {
      * Whether this attribute is of type %vdata / %HREF / %ContentType and may
      * therefore contain variable references ($x, $(x), $(x:conv)).  Attributes
      * without this flag are CDATA/NMTOKEN/ID/enumerated and must escape a
-     * literal '$' as '$$' (WAP-191 §7.5, §10.3.5; rules WML-S-64/65).
+     * literal '$' as '$$' (WML 1.3: 7.5, 10.3.5; rules WML-S-64/65).
      */
     vdata?: boolean;
-    /** Lexical value type for light validation (WAP-191 §8.2, §8.7). */
+    /** Lexical value type for light validation (WML 1.3: 8.2, 8.7). */
     type?: 'number' | 'length';
 }
 
@@ -89,7 +89,7 @@ const TASK = ['go', 'prev', 'noop', 'refresh'];
 const NAVELMTS = ['do', 'onevent'];
 const FIELDS = [...FLOW, 'input', 'select', 'fieldset'];
 
-/** Intrinsic events legal for each parent element (WAP-191 §9.10, Table 2). */
+/** Intrinsic events legal for each parent element (WML 1.3: 9.10, Table 2). */
 const INTRINSIC_EVENTS: Record<string, string[]> = {
     'card': ['onenterforward', 'onenterbackward', 'ontimer'],
     'template': ['onenterforward', 'onenterbackward', 'ontimer'],
@@ -369,7 +369,7 @@ const DTD_ELEMENTS: Record<string, ElementDef> = {
 };
 
 // ---------------------------------------------------------------------------
-// WML input format mask validation (WAP WML 1.3 §11.6.3)
+// WML input format mask validation (WAP WML 1.3: 11.6.3)
 // ---------------------------------------------------------------------------
 
 /**
@@ -383,13 +383,14 @@ const DTD_ELEMENTS: Record<string, ElementDef> = {
  *   M  – any character (default upper)
  *   m  – any character (default lower)
  *
- * Modifiers:
- *   nf – up to n chars of type f   (n is 1+ digits)
+ * Modifiers, once and at the end of the format:
+ *   nf – up to n chars of type f   (n is 1-9)
  *   *f – unlimited chars of type f
  *
  * Escape: \c – literal character c  (inserted automatically, not user-entered)
  *
- * A format string is one or more groups: ( [digits | '*'] formatCode | '\' char )
+ * A format string is codes and '\' char escapes, then at most one
+ * ( digit | '*' ) formatCode.
  */
 
 const FORMAT_CODES = new Set(['A', 'a', 'N', 'n', 'X', 'x', 'M', 'm']);
@@ -403,91 +404,70 @@ export interface FormatParseResult {
     maxChars: number;
 }
 
+// WML 1.3: 11.6.3 The Input Element
 export function parseWmlFormatMask(format: string): FormatParseResult {
     if (!format) {
         return { valid: true, requiresInput: false, maxChars: Infinity };
     }
 
+    const bad = (error: string): FormatParseResult => ({ valid: false, error, requiresInput: false, maxChars: 0 });
+    let chars = 0;              // codes and literals before the end
     let i = 0;
-    let hasUserChar = false;  // at least one non-escape group with count > 0
-    let totalMax = 0;
-    let hasUnlimited = false;
-
     while (i < format.length) {
         const ch = format[i];
 
         // Escape sequence: \c
         if (ch === '\\') {
             if (i + 1 >= format.length) {
-                return { valid: false, error: `Incomplete escape sequence at end of format`, requiresInput: false, maxChars: 0 };
+                return bad(`Incomplete escape sequence at end of format`);
             }
-            i += 2; // skip \c — literal chars don't count as user input
-            continue;
-        }
-
-        // *f – unlimited
-        if (ch === '*') {
-            if (i + 1 >= format.length) {
-                return { valid: false, error: `Expected format code after '*'`, requiresInput: false, maxChars: 0 };
-            }
-            const code = format[i + 1];
-            if (!FORMAT_CODES.has(code)) {
-                return { valid: false, error: `Invalid format code '${code}' after '*'. Expected one of: A, a, N, n, X, x, M, m`, requiresInput: false, maxChars: 0 };
-            }
-            // *f allows zero or more, so doesn't force input on its own
-            hasUnlimited = true;
+            chars++;
             i += 2;
             continue;
         }
 
-        // [digits] f – counted group
-        let count = '';
-        while (i < format.length && format[i] >= '0' && format[i] <= '9') {
-            count += format[i];
-            i++;
-        }
-
-        if (i >= format.length) {
-            if (count) {
-                return { valid: false, error: `Expected format code after count '${count}'`, requiresInput: false, maxChars: 0 };
+        // *f, nf (n 1-9): only once, at the end (WML 1.3: 11.6.3)
+        if (ch === '*' || (ch >= '0' && ch <= '9')) {
+            const code = format[i + 1];
+            if (code === undefined) {
+                return bad(`Expected format code after '${ch}'`);
             }
-            break;
-        }
-
-        const code = format[i];
-        if (!FORMAT_CODES.has(code)) {
-            if (count) {
-                return { valid: false, error: `Invalid format code '${code}' after count '${count}'. Expected one of: A, a, N, n, X, x, M, m`, requiresInput: false, maxChars: 0 };
+            if (ch === '0' || (code >= '0' && code <= '9')) {
+                return bad(`A count must be from 1 to 9`);
             }
-            return { valid: false, error: `Invalid character '${code}' in format mask. Expected a format code (A, a, N, n, X, x, M, m), escape (\\), count, or '*'`, requiresInput: false, maxChars: 0 };
+            if (!FORMAT_CODES.has(code)) {
+                return bad(`Invalid format code '${code}' after '${ch}'. Expected one of: A, a, N, n, X, x, M, m`);
+            }
+            if (i + 2 !== format.length) {
+                return bad(`'${ch}${code}' must come at the end of the format`);
+            }
+            return {
+                valid: true,
+                // only a lone *f allows empty input (emptyok's implied value)
+                requiresInput: !(ch === '*' && i === 0),
+                maxChars: ch === '*' ? Infinity : chars + parseInt(ch, 10),
+            };
         }
 
-        const n = count ? parseInt(count, 10) : 1;
-        if (n > 0) {
-            hasUserChar = true;
-            totalMax += n;
+        if (!FORMAT_CODES.has(ch)) {
+            return bad(`Invalid character '${ch}' in format mask. Expected a format code (A, a, N, n, X, x, M, m), escape (\\), count, or '*'`);
         }
+        chars++;
         i++;
     }
 
-    if (hasUnlimited) {
-        totalMax = Infinity;
-    }
-
-    return {
-        valid: true,
-        requiresInput: hasUserChar && !hasUnlimited,
-        maxChars: totalMax,
-    };
+    return { valid: true, requiresInput: true, maxChars: chars };
 }
 
 /**
+ * WML 1.3: 11.6.3 The Input Element
+ *
  * Determine whether an <input> element allows empty input, per WML 1.3 spec:
  *
  * 1. If emptyok is explicitly set → use that value.
- * 2. If format is specified:
- *    - If all groups use '*' (e.g. "*M", "*N*x") → emptyok defaults true
- *    - If any group has a fixed count (e.g. "3N", "M*M") → emptyok defaults false
+ * 2. If format is specified: only a lone "*f" (e.g. "*M") lets emptyok
+ *    default to true ("the format mask is implied or a *f format code");
+ *    anything else ("3N", "M*M") → false
  * 3. If neither emptyok nor format is specified → emptyok defaults true
  */
 export function resolveEmptyOk(emptyokAttr: string | undefined, format: string | undefined): boolean {
@@ -501,7 +481,7 @@ export function resolveEmptyOk(emptyokAttr: string | undefined, format: string |
 }
 
 // ---------------------------------------------------------------------------
-// Variable-reference scanning (WAP-191 §7.5, §10.3, rules WML-S-64/65)
+// Variable-reference scanning (WML 1.3: 7.5, 10.3, rules WML-S-64/65)
 // ---------------------------------------------------------------------------
 
 // $name | $(name) | $(name:conv)  — conv accepted leniently as any alpha word.
@@ -514,6 +494,10 @@ interface DollarIssue {
 }
 
 /**
+ * WML 1.3:
+ *  - 10.3.5 Validation
+ *  - 10.3.3 The Dollar-sign Character
+ *
  * Scan a string (attribute value or PCDATA) for dollar-sign usage problems.
  *  - `$$` is always a legal escaped literal dollar.
  *  - When variables are allowed (vdata attribute or text), every other `$`
@@ -574,7 +558,7 @@ interface XmlNode {
 interface ParseResult {
     root?: XmlNode;
     error?: { message: string; line: number; col: number };
-    /** Whether an XML declaration / DOCTYPE prologue was present (WAP-191 §11.1) */
+    /** Whether an XML declaration / DOCTYPE prologue was present (WML 1.3: 11.1) */
     hadXmlDecl: boolean;
     hadDoctype: boolean;
     posOf: (offset: number) => { line: number; col: number };
@@ -737,6 +721,7 @@ function descendantsNamed(node: XmlNode, tag: string, stopAt: string[] = []): Xm
 // Validation walk
 // ---------------------------------------------------------------------------
 
+// WML 1.3: 13.2 Document Type Definition (DTD)
 function validateNode(node: XmlNode, parentTag: string | null, diags: WmlDiag[], posOf: (o: number) => { line: number; col: number }): void {
     const def = DTD_ELEMENTS[node.tag];
 
@@ -804,7 +789,7 @@ function validateNode(node: XmlNode, parentTag: string | null, diags: WmlDiag[],
                 Severity.Error,
             ));
         }
-        // Variable-reference placement / syntax (WML-S-64/65, §10.3.5)
+        // Variable-reference placement / syntax (WML-S-64/65, WML 1.3: 10.3.5)
         for (const issue of scanDollar(aValue, !!aDef.vdata)) {
             diags.push(makeDiag(
                 aPos.line, aPos.col, aName.length + aValue.length + 3,
@@ -830,7 +815,7 @@ function validateNode(node: XmlNode, parentTag: string | null, diags: WmlDiag[],
         }
     }
 
-    // 4b) Variable-reference syntax in PCDATA text (§10.3.5; e.g. "$10.00" is an error)
+    // 4b) Variable-reference syntax in PCDATA text (WML 1.3: 10.3.5; e.g. "$10.00" is an error)
     if (def.children.includes('#PCDATA')) {
         for (const chunk of node.texts) {
             for (const issue of scanDollar(chunk.value, true)) {
@@ -940,11 +925,13 @@ function validateNode(node: XmlNode, parentTag: string | null, diags: WmlDiag[],
 }
 
 /**
+ * WML 1.3: 15.3 WML Document - Server
+ *
  * Conformance rules from the WML 1.3 Static Conformance Statement that the
  * pure DTD content-model checks above do not capture.
  */
 function checkConformanceRules(node: XmlNode, diags: WmlDiag[]): void {
-    // WML-S-66 (§9.7): two or more <do> with the same name in a card or template.
+    // WML-S-66 (WML 1.3: 9.7): two or more <do> with the same name in a card or template.
     // An unspecified name defaults to the value of the type attribute.
     if (node.tag === 'card' || node.tag === 'template') {
         const seen = new Map<string, XmlNode>();
@@ -966,7 +953,7 @@ function checkConformanceRules(node: XmlNode, diags: WmlDiag[]): void {
         }
     }
 
-    // WML-S-69 (§9.10): conflicting / inapplicable event bindings.
+    // WML-S-69 (WML 1.3: 9.10): conflicting / inapplicable event bindings.
     const legalEvents = INTRINSIC_EVENTS[node.tag];
     if (legalEvents) {
         const seenEvents = new Map<string, XmlNode>();
@@ -1001,7 +988,7 @@ function checkConformanceRules(node: XmlNode, diags: WmlDiag[]): void {
         }
     }
 
-    // WML-S-67 (§11.3.2): <meta> must specify exactly one of name / http-equiv.
+    // WML-S-67 (WML 1.3: 11.3.2): <meta> must specify exactly one of name / http-equiv.
     if (node.tag === 'meta') {
         const hasName = 'name' in node.attributes;
         const hasHttpEquiv = 'http-equiv' in node.attributes;
@@ -1020,7 +1007,7 @@ function checkConformanceRules(node: XmlNode, diags: WmlDiag[]): void {
         }
     }
 
-    // WML-S-68 (§11.8.5): the number of columns in a table must not be zero.
+    // WML-S-68 (WML 1.3: 11.8.5): the number of columns in a table must not be zero.
     if (node.tag === 'table' && /^0+$/.test(node.attributes['columns'] ?? '')) {
         const pos = node.attrPositions['columns'] ?? { line: node.line, col: node.col };
         diags.push(makeDiag(
@@ -1030,7 +1017,7 @@ function checkConformanceRules(node: XmlNode, diags: WmlDiag[]): void {
         ));
     }
 
-    // §9.8: it is an error to specify other than one task in an <anchor>.
+    // WML 1.3: 9.8 The Anchor Element: it is an error to specify other than one task in an <anchor>.
     if (node.tag === 'anchor') {
         const tasks = node.children.filter(c => TASK.includes(c.tag));
         if (tasks.length !== 1) {
@@ -1042,7 +1029,7 @@ function checkConformanceRules(node: XmlNode, diags: WmlDiag[]): void {
         }
     }
 
-    // §11.3.1: it is an error for a deck to contain more than one <access> element.
+    // WML 1.3: 11.3.1 The Access Element: it is an error for a deck to contain more than one <access> element.
     if (node.tag === 'head') {
         const accesses = childrenNamed(node, 'access');
         for (let i = 1; i < accesses.length; i++) {
@@ -1054,7 +1041,7 @@ function checkConformanceRules(node: XmlNode, diags: WmlDiag[]): void {
         }
     }
 
-    // §11.7: it is an error to have more than one <timer> element in a card.
+    // WML 1.3: 11.7 The Timer Element: it is an error to have more than one <timer> element in a card.
     if (node.tag === 'card') {
         const timers = childrenNamed(node, 'timer');
         for (let i = 1; i < timers.length; i++) {
@@ -1083,7 +1070,7 @@ export function validateWmlText(text: string): WmlDiag[] {
         return diags;
     }
 
-    // §11.1: a valid WML deck must contain the document prologue (XML declaration
+    // WML 1.3: 11.1 Document Prologue: a valid WML deck must contain the document prologue (XML declaration
     // and DOCTYPE). "It is an error to omit the prologue."
     if (root) {
         if (!hadXmlDecl) {

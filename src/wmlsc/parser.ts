@@ -19,11 +19,7 @@ import {
     Statement, BlockStatement, VariableStatement, VariableDeclarator,
     ExpressionStatement, IfStatement, WhileStatement, ForStatement,
     BreakStatement, ContinueStatement, ReturnStatement, EmptyStatement,
-    Expression, AssignmentExpression, ConditionalExpression, BinaryExpression,
-    UnaryExpression, UpdateExpression, CallExpression, LibraryCallExpression,
-    ExternalCallExpression, IdentifierExpression, IntegerLiteral, FloatLiteral,
-    StringLiteral, BooleanLiteral, InvalidLiteral, TypeofExpression,
-    IsvalidExpression, SourceLocation, CommaExpression,
+    Expression, AssignmentExpression, IdentifierExpression, SourceLocation,
 } from './ast';
 
 export class ParseError extends Error {
@@ -54,10 +50,6 @@ export class Parser {
 
     private current(): Token {
         return this.tokens[this.pos] ?? this.tokens[this.tokens.length - 1];
-    }
-
-    private peek(offset = 0): Token {
-        return this.tokens[this.pos + offset] ?? this.tokens[this.tokens.length - 1];
     }
 
     private advance(): Token {
@@ -144,6 +136,9 @@ export class Parser {
 
     // --- Grammar Rules ---
 
+    // WMLScript:
+    //  - 7.3 WMLScript Syntactic Grammar
+    //  - 6.7 Pragmas
     private parseCompilationUnit(): CompilationUnit {
         const l = this.loc();
         const externalDeclarations: ExternalDeclaration[] = [];
@@ -238,6 +233,8 @@ export class Parser {
         this.match(TokenType.Semicolon);
     }
 
+    // WMLScript: 6.4.1 Declaration
+    //
     // [extern] function Name(params) { body }
     private parseFunctionDeclaration(): FunctionDeclaration {
         const l = this.loc();
@@ -263,6 +260,8 @@ export class Parser {
         return { type: 'FunctionDeclaration', name: name.value, params, body, isExtern, loc: l };
     }
 
+    // WMLScript: 6.5.3 Block Statement
+    //
     // { statement* }
     private parseBlockStatement(): BlockStatement {
         const l = this.loc();
@@ -300,6 +299,8 @@ export class Parser {
         }
     }
 
+    // WMLScript: 6.5.4 Variable Statement
+    //
     // var x = expr, y = expr ;
     private parseVariableStatement(): VariableStatement {
         const l = this.loc();
@@ -323,6 +324,8 @@ export class Parser {
         return { type: 'VariableDeclarator', name: name.value, init, loc: l };
     }
 
+    // WMLScript: 6.5.5 If Statement
+    //
     // if (expr) stmt [else stmt]
     private parseIfStatement(): IfStatement {
         const l = this.loc();
@@ -338,6 +341,8 @@ export class Parser {
         return { type: 'IfStatement', test, consequent, alternate, loc: l };
     }
 
+    // WMLScript: 6.5.6 While Statement
+    //
     // while (expr) stmt
     private parseWhileStatement(): WhileStatement {
         const l = this.loc();
@@ -349,6 +354,8 @@ export class Parser {
         return { type: 'WhileStatement', test, body, loc: l };
     }
 
+    // WMLScript: 6.5.7 For Statement
+    //
     // for (init; test; update) stmt
     private parseForStatement(): ForStatement {
         const l = this.loc();
@@ -386,6 +393,7 @@ export class Parser {
         return { type: 'ForStatement', init, test, update, body, loc: l };
     }
 
+    // WMLScript: 6.5.8 Break Statement
     private parseBreakStatement(): BreakStatement {
         const l = this.loc();
         this.expect(TokenType.Break);
@@ -393,6 +401,7 @@ export class Parser {
         return { type: 'BreakStatement', loc: l };
     }
 
+    // WMLScript: 6.5.9 Continue Statement
     private parseContinueStatement(): ContinueStatement {
         const l = this.loc();
         this.expect(TokenType.Continue);
@@ -400,6 +409,7 @@ export class Parser {
         return { type: 'ContinueStatement', loc: l };
     }
 
+    // WMLScript: 6.5.10 Return Statement
     private parseReturnStatement(): ReturnStatement {
         const l = this.loc();
         this.expect(TokenType.Return);
@@ -411,12 +421,14 @@ export class Parser {
         return { type: 'ReturnStatement', argument, loc: l };
     }
 
+    // WMLScript: 6.5.1 Empty Statement
     private parseEmptyStatement(): EmptyStatement {
         const l = this.loc();
         this.expect(TokenType.Semicolon);
         return { type: 'EmptyStatement', loc: l };
     }
 
+    // WMLScript: 6.5.2 Expression Statement
     private parseExpressionStatement(): ExpressionStatement {
         const l = this.loc();
         const expression = this.parseExpression();
@@ -426,6 +438,7 @@ export class Parser {
 
     // --- Expression Parsing ---
 
+    // WMLScript: 6.3.7 Comma Operator
     private parseExpression(): Expression {
         const expr = this.parseAssignmentExpression();
         if (this.check(TokenType.Comma)) {
@@ -438,6 +451,7 @@ export class Parser {
         return expr;
     }
 
+    // WMLScript: 6.3.1 Assignment Operators
     private parseAssignmentExpression(): Expression {
         const expr = this.parseConditionalExpression();
 
@@ -472,6 +486,8 @@ export class Parser {
         return expr;
     }
 
+    // WMLScript: 6.3.8 Conditional Operator
+    //
     // expr ? expr : expr
     private parseConditionalExpression(): Expression {
         const expr = this.parseLogicalOrExpression();
@@ -485,6 +501,10 @@ export class Parser {
         return expr;
     }
 
+    // WMLScript:
+    //  - 6.3.3 Logical Operators
+    //  - 6.3.12 Expression Bindings
+    //
     // || operator
     private parseLogicalOrExpression(): Expression {
         let left = this.parseLogicalAndExpression();
@@ -598,6 +618,10 @@ export class Parser {
         return left;
     }
 
+    // WMLScript:
+    //  - 6.3.9 typeof Operator
+    //  - 6.3.10 isvalid Operator
+    //
     // prefix: ++ -- + - ~ ! typeof isvalid
     private parseUnaryExpression(): Expression {
         const l = this.loc();
@@ -658,6 +682,8 @@ export class Parser {
         return expr;
     }
 
+    // WMLScript: 6.4.2 Function Calls
+    //
     // function calls: name(args), Lib.func(args), Alias#func(args)
     private parseCallExpression(): Expression {
         const l = this.loc();

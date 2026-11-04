@@ -16,7 +16,7 @@
 var vscodeApi = acquireVsCodeApi();
 
 // This is a browser, not the editor preview: an unset variable renders as
-// nothing (WML 1.3 §10.3.1) rather than as wmlTransform's "[name]" authoring
+// nothing (WML 1.3: 10.3.1) rather than as wmlTransform's "[name]" authoring
 // placeholder. See updateVariables() in wml-engine.js.
 window.WML_STRICT_VARS = true;
 
@@ -24,6 +24,23 @@ window.WML_STRICT_VARS = true;
 var deckHistory = [];      // stack of {url, method, postfields} for cross-deck back
 var currentUrl = '';       // current deck URL
 var currentFetch = { method: 'get', postfields: null }; // how the current deck was fetched
+// The deck load in flight: its task's setvars (applied when the deck
+// arrives, WML 1.3: 12.5.1 step 5), the card a Back returns to, and what
+// to restore if the reply is no deck (a WMLScript unit)
+var pendingNav = null;
+
+// The card on screen
+function currentCardEl() {
+    return document.querySelector('.wml-card[style*="display: block"], .wml-card[style*="display:block"]');
+}
+
+// WMLScript: 8.3 WMLScript and URLs
+//
+// A WMLScript call: a .wmls / .wmlsc URL with a fragment.  Other URLs are
+// fetched, and a reply typed as WMLScript is run too (scriptContent).
+function isScriptHref(href) {
+    return /\.wmlsc?(#|%23)/.test(href);
+}
 
 // ── Address bar ──────────────────────────────────────────────────
 
@@ -35,16 +52,32 @@ function doNavigate() {
         url = 'http://' + url;
         document.getElementById('url-input').value = url;
     }
-    navigateToUrl(url);
+    openUrl(url);
 }
 
-function doBack() {
+// WML 1.3: 10.4 Context Restrictions
+//
+// A URL the user enters (the address bar, history) is no interaction with
+// the content: its deck starts another context (WML 1.3: 10.4), no
+// variables and no history, the deck left not kept to go back to; a fetch
+// that fails changes nothing
+function openUrl(url) {
+    navigateToUrl(url, null, 'get', false, false, null, null, false, true);
+}
+
+// WML 1.3:
+//  - 12.5.2 The Prev Task
+//  - 9.2 History
+function doBack(setvars) {
     if (deckHistory.length > 0) {
         var prev = deckHistory.pop();
+        // WML 1.3: 12.5.2 The Prev Task: back to the card left, with that deck's card
+        // history; onenterbackward, not onenterforward or newcontext
+        pendingNav = { setvars: timerExit(setvars), back: true, card: prev.card, cards: prev.cards };
         document.getElementById('url-input').value = prev.url;
         currentUrl = prev.url;
         // Restore how this deck was originally fetched so POST decks re-issue
-        // their post data on back navigation (WAP-191 §9.2, §12.5.2).
+        // their post data on back navigation (WML 1.3: 9.2, 12.5.2).
         currentFetch = { method: prev.method || 'get', postfields: prev.postfields || null,
                          acceptCharset: prev.acceptCharset || null };
         vscodeApi.postMessage({
@@ -57,6 +90,7 @@ function doBack() {
     }
 }
 
+// WML 1.3: 12.5.4 The Refresh Task
 function doRefresh() {
     if (currentUrl) {
         vscodeApi.postMessage({ type: 'navigate', url: currentUrl });
@@ -70,14 +104,43 @@ function doDebug() {
 }
 
 document.getElementById('url-input').addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') {
+    // keyCode for Chromium 30 (Android 4.4), which has no KeyboardEvent.key.
+    if (e.key === 'Enter' || e.keyCode === 13) {
         doNavigate();
     }
 });
 
 // ── Navigation ───────────────────────────────────────────────────
 
-function navigateToUrl(url, postfields, method, sendreferer, isLink, acceptCharset) {
+// WML 1.3: 9.5.1 The Go Element
+//
+// The referring deck as a sendreferer Referer: its URL relative to `url`,
+// the one requested (WML 1.3: 9.5.1: "the smallest relative URI possible
+// if it can be relative at all"), as wap-browser-c sends it.  From another
+// site the whole URL; else the shorter of its path and the path relative
+// to url's directory ("../" up).  The query stays.
+function relativeReferer(from, url) {
+    var origin = function(u) { var m = /^[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\/?#]*/.exec(u); return m ? m[0] : null; };
+    var o = origin(from);
+    if (!o || o !== origin(url) || from.charAt(o.length) !== '/') { return from; }
+    var k = o.length, dir = o.length;
+    while (k < from.length && from.charAt(k) === url.charAt(k) && from.charAt(k) !== '?') {
+        if (from.charAt(k++) === '/') { dir = k - 1; }
+    }
+    var rest = url.substring(dir + (url.charAt(dir) === '/' ? 1 : 0)).split(/[?#]/)[0];
+    var ups = rest.split('/').length - 1;
+    var tail = from.substring(dir + 1), path = from.substring(o.length);
+    if ((!ups && (!tail || /^[^\/?]*:/.test(tail))) || 3 * ups + tail.length >= path.length) {
+        return path;
+    }
+    return new Array(ups + 1).join('../') + tail;
+}
+
+// WML 1.3:
+//  - 12.5.1 The Go Task
+//  - 9.5.1 The Go Element
+//  - 11.3.1 The Access Element
+function navigateToUrl(url, postfields, method, sendreferer, isLink, acceptCharset, setvars, noCache, fresh) {
     // Resolve relative URLs
     if (currentUrl && !url.match(/^https?:\/\//i)) {
         try {
@@ -86,18 +149,20 @@ function navigateToUrl(url, postfields, method, sendreferer, isLink, acceptChars
     }
 
     // Check for WMLScript call
-    if (url.indexOf('.wmls#') >= 0 || url.indexOf('.wmls%23') >= 0) {
+    if (isScriptHref(url)) {
+        commitSetvars(setvars);
         executeWmlScript(url);
         return;
     }
 
     // Check for fragment-only navigation (card switch within deck)
-    if (url.startsWith('#')) {
-        showCard(url.substring(1));
+    if (url.startsWith('#') && !noCache) {
+        showCard(url.substring(1), setvars);
         return;
     }
 
-    // Check if it's same-deck card navigation (e.g. "deck.wml#card2")
+    // Check if it's same-deck card navigation (e.g. "deck.wml#card2");
+    // cache-control="no-cache" fetches it again (WML 1.3: 9.5.1)
     try {
         var parsed = new URL(url);
         var baseUrl = parsed.origin + parsed.pathname + parsed.search;
@@ -106,17 +171,22 @@ function navigateToUrl(url, postfields, method, sendreferer, isLink, acceptChars
             var parsedCurrent = new URL(currentUrl);
             currentBase = parsedCurrent.origin + parsedCurrent.pathname + parsedCurrent.search;
         }
-        if (baseUrl === currentBase && parsed.hash) {
-            showCard(parsed.hash.substring(1));
+        if (baseUrl === currentBase && parsed.hash && !noCache) {
+            showCard(parsed.hash.substring(1), setvars);
             return;
         }
     } catch(e) { /* not a valid URL, send to extension anyway */ }
 
-    // Save current deck (and how it was fetched) in deck history for back nav.
+    // Save current deck (and how it was fetched) in deck history for back
+    // nav, with the card on screen and the deck's card history.
     var fromUrl = currentUrl;
-    if (currentUrl) {
+    var card = currentCardEl();
+    pendingNav = { setvars: timerExit(setvars), fromUrl: currentUrl, fromFetch: currentFetch,
+                   pushed: !!currentUrl && !fresh, fresh: !!fresh };
+    if (currentUrl && !fresh) {
         deckHistory.push({ url: currentUrl, method: currentFetch.method, postfields: currentFetch.postfields,
-                           acceptCharset: currentFetch.acceptCharset });
+                           acceptCharset: currentFetch.acceptCharset,
+                           card: card ? card.id : null, cards: wmlHistory.slice() });
     }
 
     currentUrl = url;
@@ -130,22 +200,28 @@ function navigateToUrl(url, postfields, method, sendreferer, isLink, acceptChars
         url: url,
         postfields: postfields || null,
         method: method || 'get',
-        // sendreferer="true" → send the referring deck URL (WAP-191 §9.5.1)
-        referer: sendreferer ? fromUrl : null,
+        // sendreferer="true" → send the referring deck URL, relative to
+        // the one requested (WML 1.3: 9.5.1)
+        referer: sendreferer && fromUrl ? relativeReferer(fromUrl, url) : null,
+        // cache-control="no-cache" → reload from the origin server, with
+        // the header (WML 1.3: 9.5.1)
+        noCache: !!noCache,
         // Referring deck for deck access control — only for in-deck links, not
-        // user-initiated address-bar / history navigation (WAP-191 §11.3.1).
+        // user-initiated address-bar / history navigation (WML 1.3: 11.3.1).
         fromDeck: isLink ? fromUrl : null,
-        // <go accept-charset>: the charset postfields are sent in (§9.5.1)
+        // <go accept-charset>: the charset postfields are sent in (WML 1.3: 9.5.1)
         acceptCharset: acceptCharset || null
     });
 }
 
+// WMLScript: 8.3 WMLScript and URLs
 function executeWmlScript(href) {
-    // Parse "script.wmls#func(args)" — handle both encoded and decoded '#'
-    var normalizedHref = href.replace('.wmls%23', '.wmls#');
-    var hashIdx = normalizedHref.indexOf('.wmls#');
-    var scriptUrl = normalizedHref.substring(0, hashIdx + 5);
-    var callPart = normalizedHref.substring(hashIdx + 6);
+    // Parse "script.wmls#func(args)" — handle both encoded and decoded '#'.
+    // The unit's URL may have any name (a reply typed as WMLScript).
+    var normalizedHref = href.replace(/(\.wmlsc?)%23/, '$1#');
+    var hashIdx = normalizedHref.indexOf('#');
+    var scriptUrl = normalizedHref.substring(0, hashIdx);
+    var callPart = normalizedHref.substring(hashIdx + 1);
     var parenIdx = callPart.indexOf('(');
     var funcName, args;
     if (parenIdx >= 0) {
@@ -176,23 +252,38 @@ function executeWmlScript(href) {
         scriptUrl: scriptUrl,
         funcName: funcName,
         args: args,
-        wmlVars: varsSnapshot
+        wmlVars: varsSnapshot,
+        // the card on screen, for WMLBrowser.getCurrentCard (WMLScript Libraries: 11.6)
+        card: (document.querySelector('.wml-card[style*="display: block"], .wml-card[style*="display:block"]') || {}).id || ''
     });
 }
 
 // ── Navigation (browser-specific: wmlNavigate, wmlPrevDeck hook) ─
 
+// WML 1.3: 12.5.2 The Prev Task
+//
 // Cross-deck Back hook (called by wml-engine.js's wmlPrev when a deck's card
 // history is exhausted): step back through the browser's deck history.
-function wmlPrevDeck() {
-    doBack();
+function wmlPrevDeck(setvars) {
+    doBack(setvars);
 }
 
-function wmlNavigate(href, postfields, method, sendreferer, acceptCharset) {
+// newcontext hook (wml-engine.js wmlNewContext): the deck history goes too
+function wmlClearHistory() {
+    deckHistory = [];
+}
+
+// WML 1.3: 12.5.1 The Go Task
+function wmlNavigate(href, postfields, method, sendreferer, acceptCharset, setvars, noCache) {
     href = substituteVars(href, true);  // %HREF context → default escape conversion
-    if (href.startsWith('#')) {
-        showCard(href.substring(1));
-    } else if (href.indexOf('.wmls#') >= 0 || href.indexOf('.wmls%23') >= 0) {
+    if (href.startsWith('#') && noCache && currentUrl) {
+        // no-cache: this deck fetched again, its postfields sent (WML 1.3: 9.5.1)
+        navigateToUrl(currentUrl.split('#')[0] + href, postfields, method, sendreferer, true,
+                      acceptCharset, setvars, true);
+    } else if (href.startsWith('#')) {
+        showCard(href.substring(1), setvars);
+    } else if (isScriptHref(href)) {
+        commitSetvars(setvars);
         executeWmlScript(href);
     } else if (/\.wml#/.test(href)) {
         // Same-deck or cross-deck card reference
@@ -201,13 +292,13 @@ function wmlNavigate(href, postfields, method, sendreferer, acceptCharset) {
         var cardPart = href.substring(hashIdx + 1);
         // Check if it's the same deck
         if (!deckPart || deckPart === '') {
-            showCard(cardPart);
+            showCard(cardPart, setvars);
         } else {
             // Different deck: navigate then show card
-            navigateToUrl(href, postfields, method, sendreferer, true, acceptCharset);
+            navigateToUrl(href, postfields, method, sendreferer, true, acceptCharset, setvars, noCache);
         }
     } else {
-        navigateToUrl(href, postfields, method, sendreferer, true, acceptCharset);
+        navigateToUrl(href, postfields, method, sendreferer, true, acceptCharset, setvars, noCache);
     }
 }
 
@@ -225,40 +316,65 @@ function setStatus(msg, isError) {
 
 // ── Render deck content received from extension ──────────────────
 
+// WML 1.3:
+//  - 12.5.1 The Go Task
+//  - 5.2 Fragment Anchors
 function renderDeck(data) {
     var screen = document.getElementById('phone-screen');
-    wmlHistory = [];  // reset intra-deck history
-    wmlVars = data.vars || {};
+    var nav = pendingNav || {};
+    pendingNav = null;
+    // The variables are this page's, across decks (WML 1.3: 10): the host's
+    // copy (data.vars) is only as new as the last script run.  A Back
+    // brings the deck's card history back.  A URL the user entered starts
+    // another context (WML 1.3: 10.4).
+    if (nav.fresh) { wmlNewContext(); }
+    wmlHistory = nav.cards || [];
+    if (data.movedTo) {
+        // A redirect: the deck is the one at the new URL, fetched by GET
+        // (WML 1.3: 5.3, 9.2), so links resolve, Refresh and Back fetch it there
+        currentUrl = data.movedTo;
+        currentFetch = { method: 'get', postfields: null, acceptCharset: currentFetch.acceptCharset };
+        document.getElementById('url-input').value = currentUrl;
+    }
+    commitSetvars(nav.setvars);                 // WML 1.3: 12.5.1 step 5, WML 1.3: 12.5.2 step 4
     wmlCharsetMap = data.charsetMap || null;   // $(v:escape) in the deck's charset
 
     screen.innerHTML = data.cardsHtml;
 
-    // Update title
     var titleEl = document.getElementById('card-title');
-    if (titleEl && data.firstCardTitle) {
-        titleEl.textContent = data.firstCardTitle;
-    }
 
-    // Navigate to specific card if URL has fragment
+    // Navigate to specific card if URL has fragment; Back to the card left
     var targetCard = null;
-    if (data.fragment) {
-        targetCard = document.getElementById(data.fragment);
+    if (nav.card) {
+        targetCard = findCard(nav.card);
+    }
+    if (!targetCard && data.fragment) {
+        targetCard = findCard(data.fragment);    // else the first (WML 1.3: 12.5.1 step 4c)
     }
 
-    // Wire up form elements
+    // The first card or target card; its newcontext (WML 1.3: 12.5.1 step 6, a go
+    // only) comes before the fields take their initial values
+    var firstCard = targetCard || document.querySelector('.wml-card');
+    if (firstCard && !nav.back && firstCard.getAttribute('data-newcontext') === 'true') {
+        wmlNewContext();
+    }
+
+    // Wire up form elements; their values are the card's, set at its
+    // entry (WML 1.3: 11.6.2.1, 11.6.3)
     initFormElements();
 
-    // Show first card or target card
-    var firstCard = targetCard || document.querySelector('.wml-card');
     if (firstCard) {
         document.querySelectorAll('.wml-card').forEach(function(c) { c.style.display = 'none'; });
         firstCard.style.display = 'block';
-        if (titleEl) titleEl.textContent = firstCard.getAttribute('data-title') || firstCard.id;
-        processOnEvent(firstCard, 'onenterforward');
+        showCardTitle(firstCard);
+        var went = processOnEvent(firstCard, nav.back ? 'onenterbackward' : 'onenterforward');
         if (firstCard.style.display !== 'none') {
+            if (!went) { initCardFields(firstCard); }
             updateSoftkeys(firstCard);
-            processTimers(firstCard);
+            if (!went) { processTimers(firstCard); }
         }
+    } else if (titleEl && data.firstCardTitle) {
+        titleEl.textContent = data.firstCardTitle;
     }
 
     updateVariables();
@@ -272,7 +388,11 @@ function renderDeck(data) {
 var _proxyIdCounter = 0;
 var _pendingProxies = {};
 
-/** Resolve an image src to an absolute URL using currentUrl as base. */
+/** WML 1.3:
+ *  - 11.9 Images
+ *  - 5.3 Relative URLs
+ *
+ * Resolve an image src to an absolute URL using currentUrl as base. */
 function resolveImageSrc(src) {
     if (!src || src.indexOf('data:') === 0) return src;
     if (/^https?:\/\//i.test(src)) return src;  // already absolute
@@ -336,15 +456,52 @@ window.addEventListener('message', function(event) {
             renderDeck(msg);
             break;
 
-        case 'error':
+        case 'error': {
+            // WML 1.3: 12.5.5 Task Execution Failure: a task that fails (a fetch, a deck its <access>
+            // refuses) is told, and the card that started it stays, with
+            // the deck and the history as they were; no setvars applied.
+            // With no card on screen the error is the page.
+            var failed = pendingNav || {};
+            pendingNav = null;
             setStatus(msg.message, true);
+            if (failed.pushed) { deckHistory.pop(); }
+            if (failed.fromFetch && currentCardEl()) {
+                currentUrl = failed.fromUrl;
+                currentFetch = failed.fromFetch;
+                document.getElementById('url-input').value = currentUrl;
+                processTimers(currentCardEl());
+                break;
+            }
             var screen = document.getElementById('phone-screen');
             screen.innerHTML = '<div class="browser-welcome"><h2>Error</h2><p>' +
                 escapeHtml(msg.message) + '</p></div>';
             break;
+        }
+
+        case 'scriptContent': {
+            // The link's reply was a WMLScript unit (WMLScript: 14): no
+            // page, so the deck load is undone, and the function its
+            // fragment names is run
+            var nav = pendingNav || {};
+            pendingNav = null;
+            if (nav.pushed) { deckHistory.pop(); }
+            if (nav.fromFetch) {
+                currentUrl = nav.fromUrl;
+                currentFetch = nav.fromFetch;
+                document.getElementById('url-input').value = currentUrl;
+            }
+            commitSetvars(nav.setvars);
+            var stay = currentCardEl();         // still on it: its timer starts
+            if (stay) { processTimers(stay); }
+            executeWmlScript(msg.url);
+            break;
+        }
 
         case 'wmlscriptResult':
-            // WMLScript VM finished: apply variable changes and navigation
+            // WMLScript VM finished: apply variable changes and navigation.
+            // WMLBrowser.newContext(): the variables and the history go
+            // first; msg.vars are those set after it (WMLScript Libraries: 11.5)
+            if (msg.newContext) { wmlNewContext(); }
             if (msg.vars) {
                 for (var k in msg.vars) {
                     if (msg.vars.hasOwnProperty(k)) wmlVars[k] = msg.vars[k];
@@ -383,7 +540,7 @@ window.addEventListener('message', function(event) {
                     img.style.visibility = 'visible';
                 } else {
                     // The bitmap could not be fetched or decoded — which is
-                    // precisely when alt matters. WML 1.3 §11.9 makes alt the
+                    // precisely when alt matters. WML 1.3: 11.9 makes alt the
                     // image's alternative representation for exactly this case,
                     // so the deck's own text must survive; overwriting it threw
                     // away what the author wrote ("Company Logo") in favour of
@@ -443,11 +600,13 @@ function toggleMenu() {
     menu.classList.toggle('visible');
 }
 
-// Close menu when clicking outside
+// Close menu when clicking outside. The button's own click has just opened
+// it, and the target of that click is usually the icon inside the button, so
+// the test is containment, not identity.
 document.addEventListener('click', function(e) {
     var menu = document.getElementById('browser-menu');
     var btn = document.getElementById('btn-menu');
-    if (menu.classList.contains('visible') && !menu.contains(e.target) && e.target !== btn) {
+    if (menu.classList.contains('visible') && !menu.contains(e.target) && !btn.contains(e.target)) {
         menu.classList.remove('visible');
     }
 });
@@ -548,7 +707,7 @@ function doClearDownloads() {
 function renderDownloadsList(downloads) {
     var list = document.getElementById('downloads-list');
     if (!downloads || downloads.length === 0) {
-        list.innerHTML = '<div class="downloads-empty">No downloads yet.</div>';
+        list.innerHTML = '<div class="panel-empty">No downloads yet.</div>';
         return;
     }
     var html = '';
@@ -558,14 +717,14 @@ function renderDownloadsList(downloads) {
             d.size < 1048576 ? (d.size / 1024).toFixed(1) + ' KB' :
             (d.size / 1048576).toFixed(1) + ' MB';
         var dateStr = new Date(d.date).toLocaleString();
-        html += '<div class="download-item">' +
-            '<div class="download-info">' +
-                '<span class="download-name">' + escapeHtml(d.name) + '</span>' +
-                '<span class="download-meta">' + sizeStr + ' \u2022 ' + dateStr + '</span>' +
+        html += '<div class="panel-item">' +
+            '<div class="item-info">' +
+                '<span class="item-name">' + escapeHtml(d.name) + '</span>' +
+                '<span class="item-meta">' + sizeStr + ' \u2022 ' + dateStr + '</span>' +
             '</div>' +
-            '<div class="download-actions">' +
-                '<button class="download-action-btn" onclick="doOpenDownload(\'' + escapeHtml(d.path).replace(/'/g, "\\'") + '\')" title="Open">\u{1F4C4}</button>' +
-                '<button class="download-action-btn" onclick="doRevealDownload(\'' + escapeHtml(d.path).replace(/'/g, "\\'") + '\')" title="Show in folder">\u{1F4C2}</button>' +
+            '<div class="item-actions">' +
+                '<button class="dialog-btn" onclick="doOpenDownload(\'' + escapeHtml(d.path).replace(/'/g, "\\'") + '\')">Open</button>' +
+                '<button class="dialog-btn" onclick="doRevealDownload(\'' + escapeHtml(d.path).replace(/'/g, "\\'") + '\')" title="Show in folder">Reveal</button>' +
             '</div>' +
         '</div>';
     }
@@ -599,7 +758,7 @@ function doClearHistory() {
 function renderHistoryList(history) {
     var list = document.getElementById('history-list');
     if (!history || history.length === 0) {
-        list.innerHTML = '<div class="downloads-empty">No history yet.</div>';
+        list.innerHTML = '<div class="panel-empty">No history yet.</div>';
         return;
     }
     var html = '';
@@ -607,11 +766,11 @@ function renderHistoryList(history) {
         var h = history[i];
         var dateStr = new Date(h.date).toLocaleString();
         var safeUrl = escapeHtml(h.url).replace(/'/g, "\\'");
-        html += '<div class="download-item history-item" onclick="doNavigateFromHistory(\'' + safeUrl + '\')">' +
-            '<div class="download-info">' +
-                '<span class="download-name">' + escapeHtml(h.title) + '</span>' +
-                '<span class="download-meta">' + escapeHtml(h.url) + '</span>' +
-                '<span class="download-meta">' + dateStr + '</span>' +
+        html += '<div class="panel-item history-item" onclick="doNavigateFromHistory(\'' + safeUrl + '\')">' +
+            '<div class="item-info">' +
+                '<span class="item-name">' + escapeHtml(h.title) + '</span>' +
+                '<span class="item-meta">' + escapeHtml(h.url) + '</span>' +
+                '<span class="item-meta">' + dateStr + '</span>' +
             '</div>' +
         '</div>';
     }
@@ -621,7 +780,7 @@ function renderHistoryList(history) {
 function doNavigateFromHistory(url) {
     document.getElementById('history-overlay').classList.remove('visible');
     document.getElementById('url-input').value = url;
-    navigateToUrl(url);
+    openUrl(url);
 }
 
 // ── Settings Panel ──────────────────────────────────────────────
@@ -676,7 +835,7 @@ function applyScreenSize(width, height) {
     var frame = document.querySelector('.wap-phone-frame');
     var screen = document.getElementById('phone-screen');
     if (frame) frame.style.width = width + 'px';
-    if (screen) screen.style.minHeight = height + 'px';
+    if (screen) screen.style.height = height + 'px';
 }
 
 // Apply initial screen size when settings arrive

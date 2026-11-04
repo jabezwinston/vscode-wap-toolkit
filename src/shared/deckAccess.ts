@@ -3,7 +3,7 @@
  *
  *  SPDX-License-Identifier: Apache-2.0
  *
- *  WML 1.3 deck access control (WAP-191 §11.3.1, conformance rule WML-C-14).
+ *  WML 1.3 deck access control (WML 1.3: 11.3.1, conformance rule WML-C-14).
  *
  *  vscode-free so it can be unit tested directly.
  */
@@ -14,6 +14,10 @@ export interface AccessVerdict {
 }
 
 /**
+ * WML 1.3:
+ *  - 11.3.1 The Access Element
+ *  - 12.1 Deck Access Control
+ *
  * Enforce a destination deck's <access> element against the referring deck URL.
  *
  * The access domain is suffix-matched against the referrer host (whole sub-domain
@@ -33,11 +37,24 @@ export function checkDeckAccess(wml: string, referrerUrl: string, destUrl: strin
     const attrs = m[1] || '';
     const domAttr = (/\bdomain\s*=\s*"([^"]*)"/i.exec(attrs) || [])[1];
     const pathAttr = (/\bpath\s*=\s*"([^"]*)"/i.exec(attrs) || [])[1];
+    return accessAllows(domAttr, pathAttr, referrerUrl, destUrl, 'link to');
+}
 
+/**
+ * WML 1.3: 11.3.1 The Access Element
+ * WMLScript: 6.7.2 Access Control
+ *
+ * The match of an access domain and path (either may be absent: the
+ * destination's host and "/") against the referrer, as WML's <access>
+ * (WML 1.3: 11.3.1) and a WMLScript unit's `use access` (WMLScript: 6.7.2)
+ * define it alike.
+ */
+export function accessAllows(domAttr: string | undefined, pathAttr: string | undefined,
+                             referrerUrl: string, destUrl: string, verb = 'call'): AccessVerdict {
     let dest: URL, ref: URL;
     try { dest = new URL(destUrl); ref = new URL(referrerUrl); } catch { return { allowed: true }; }
 
-    // Defaults: domain → destination deck's host; path → "/".
+    // Defaults: domain → destination's host; path → "/".
     const accessDomain = (domAttr || dest.hostname).toLowerCase();
     let accessPath = pathAttr || '/';
     if (!accessPath.startsWith('/')) {
@@ -59,7 +76,7 @@ export function checkDeckAccess(wml: string, referrerUrl: string, destUrl: strin
     if (domainOk && pathOk) { return { allowed: true }; }
     return {
         allowed: false,
-        reason: `Access denied: ${referrerUrl} may not link to ${destUrl} ` +
-                `(deck restricts access to domain "${accessDomain}", path "${accessPath}")`,
+        reason: `Access denied: ${referrerUrl} may not ${verb} ${destUrl} ` +
+                `(${verb === 'call' ? 'unit' : 'deck'} restricts access to domain "${accessDomain}", path "${accessPath}")`,
     };
 }

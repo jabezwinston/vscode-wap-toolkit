@@ -18,15 +18,13 @@
  */
 import { EventEmitter } from 'events';
 import type { WmlscModule } from './decoder';
-import type { LineMapEntry } from './compiler';
+import type { DebugInfo } from './compiler';
 import type { WmlsValue, LibraryContext } from './stdlib';
 import type { VMResult } from './vm';
 
 /** A compiled script registered for debugging, keyed by its `wml-debug:` URI. */
-export interface RegisteredScript {
+export interface RegisteredScript extends DebugInfo {
     module: WmlscModule;
-    lineMaps: LineMapEntry[][];
-    varNames: string[][];
 }
 
 /** A request to run a function under debugger control. */

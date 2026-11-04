@@ -13,16 +13,16 @@
  */
 import {
     Opcode, WmlsType,
-    classifyOpcode, decodeMbUint32,
+    classifyOpcode,
     STDLIB_NARGS,
 } from './opcodes';
 import {
-    WmlscModule, WmlscFunction, WmlscConstant,
+    WmlscModule, WmlscFunction,
     decodeWmlsc, verifyModule,
 } from './decoder';
 import {
     WmlsValue, mkInt, mkFloat, mkString, mkBool, mkInvalid,
-    toNumber, toInteger, toFloat, toBool, toString as wmlsToString,
+    unaryNum, toBool, toString as wmlsToString,
     getStdLibFunctions, LibraryContext, createDefaultContext,
     DialogSuspend, DialogRequest,
 } from './stdlib';
@@ -35,26 +35,29 @@ export interface VMOptions {
 }
 
 /**
- * Fatal run-time error classification per WAP-193 §12.3. A fatal error aborts the
+ * WMLScript: 12.3 Fatal Errors
+ *
+ * Fatal run-time error classification per WMLScript: 12.3. A fatal error aborts the
  * program and is signalled to the caller (set on VMResult.error + .errorKind),
- * whereas non-fatal errors (§12.4 — divide-by-zero, overflow, conversion) instead
+ * whereas non-fatal errors (WMLScript: 12.4 — divide-by-zero, overflow, conversion) instead
  * yield `invalid` (FP underflow → 0.0) and let the program continue.
  */
 export enum WmlsErrorKind {
-    VerificationFailed = 'verification-failed',       // §12.3.1.1
-    InvalidFunctionArguments = 'invalid-arguments',   // §12.3.1.3
-    ExternalFunctionNotFound = 'external-not-found',  // §12.3.1.4 (and the local entry-point not found)
-    StackUnderflow = 'stack-underflow',               // §12.3.1.7
-    ProgrammedAbort = 'programmed-abort',             // §12.3.2.1 — Lang.abort()
-    ExecutionLimit = 'execution-limit',               // implementation guard (outside §12)
+    VerificationFailed = 'verification-failed',       // WMLScript: 12.3.1.1
+    InvalidFunctionArguments = 'invalid-arguments',   // WMLScript: 12.3.1.3
+    ExternalFunctionNotFound = 'external-not-found',  // WMLScript: 12.3.1.4 (and the local entry-point not found)
+    StackUnderflow = 'stack-underflow',               // WMLScript: 12.3.1.7
+    ProgrammedAbort = 'programmed-abort',             // WMLScript: 12.3.2.1 — Lang.abort()
+    ExecutionLimit = 'execution-limit',               // implementation guard (outside WMLScript: 12)
     InternalError = 'internal-error',
 }
 
-/** Map a thrown VM Error message to its §12.3 fatal classification. */
+/** Map a thrown VM Error message to its WMLScript: 12.3 fatal classification. */
 function classifyVmError(message: string): WmlsErrorKind {
     if (/stack underflow/i.test(message)) { return WmlsErrorKind.StackUnderflow; }
     if (/execution limit/i.test(message)) { return WmlsErrorKind.ExecutionLimit; }
     if (/invalid function index/i.test(message)) { return WmlsErrorKind.InvalidFunctionArguments; }
+    if (/external function not found/i.test(message)) { return WmlsErrorKind.ExternalFunctionNotFound; }
     return WmlsErrorKind.InternalError;
 }
 
@@ -63,7 +66,7 @@ export interface VMResult {
     output: string[];
     steps: number;
     error?: string;
-    errorKind?: WmlsErrorKind;   // §12.3 classification when `error` is set (fatal)
+    errorKind?: WmlsErrorKind;   // WMLScript: 12.3 classification when `error` is set (fatal)
 }
 
 // Debug event callback
@@ -79,6 +82,18 @@ export interface DebugHook {
  */
 export type DialogResolver =
     (req: DialogRequest) => Promise<string | boolean | null | undefined> | string | boolean | null | undefined;
+
+/**
+ * Resolver invoked by the async VM (callFunctionAsync) for an external call
+ * (`Alias#f()`, CALL_URL) when the context has no synchronous onCallUrl: the
+ * host loads the unit at `url` and runs `funcName`. It returns the result, or
+ * throws — a failed external call is fatal (WMLScript: 12.3.1).
+ */
+export type ExternalResolver =
+    (url: string, funcName: string, args: WmlsValue[]) => Promise<WmlsValue> | WmlsValue;
+
+/** An external call waiting for the async driver (see ExternalResolver) */
+interface ExternalSuspend { wmlsExternal: true; url: string; funcName: string; args: WmlsValue[]; }
 
 /** Coerce an onDialog response into the WMLScript value the Dialogs.* call yields. */
 function coerceDialogResult(req: DialogRequest, resp: string | boolean | null | undefined): WmlsValue {
@@ -108,6 +123,7 @@ export class WmlsVM {
     private steps = 0;
     private debugHook?: DebugHook;
     private verifyErrors: string[] = [];
+    private asyncExternal = false;      // callFunctionAsync has an ExternalResolver
 
     constructor(mod: WmlscModule, options?: VMOptions) {
         this.mod = mod;
@@ -145,6 +161,9 @@ export class WmlsVM {
         if (!fn) {
             return { value: mkInvalid(), output: this.output, steps: 0, error: `Invalid function index: ${funcIndex}`, errorKind: WmlsErrorKind.InvalidFunctionArguments };
         }
+        const argErr = this.argCountError(fn, args);
+        if (argErr) { return argErr; }
+        this.asyncExternal = false;
 
         // Set up initial call frame
         const variables: WmlsValue[] = new Array(fn.numArgs + fn.numLocals);
@@ -167,12 +186,25 @@ export class WmlsVM {
         }
     }
 
+    /** WMLScript: 12.3.1.3 Invalid Function Arguments
+     *
+     * A call from outside the unit passes exactly the function's arguments
+     *  (WMLScript: 8.3.4, 12.3.1.3: else the call fails, fatally) */
+    private argCountError(fn: WmlscFunction | undefined, args: WmlsValue[]): VMResult | null {
+        if (!fn || args.length === fn.numArgs) { return null; }
+        return {
+            value: mkInvalid(), output: this.output, steps: 0,
+            error: `${fn.name ?? 'function'} takes ${fn.numArgs} argument(s), not ${args.length}`,
+            errorKind: WmlsErrorKind.InvalidFunctionArguments,
+        };
+    }
+
     /**
      * Build the VMResult after a normal run, distinguishing Lang.exit() (a clean
-     * termination that returns its value) from Lang.abort() — a §12.3.2.1 fatal
+     * termination that returns its value) from Lang.abort() — a WMLScript: 12.3.2.1 fatal
      * Programmed Abort that must be signalled to the caller as an error.
      */
-    private finishResult(value: WmlsValue): VMResult {
+    finishResult(value: WmlsValue): VMResult {
         if (this.ctx.aborted) {
             const reason = this.ctx.exitResult ? wmlsToString(this.ctx.exitResult) : '';
             return {
@@ -192,7 +224,8 @@ export class WmlsVM {
      * execution resumes. Without interactiveDialogs this behaves like a normal
      * run (no suspension), so it is always safe to use.
      */
-    async callFunctionAsync(name: string, args: WmlsValue[], onDialog: DialogResolver): Promise<VMResult> {
+    async callFunctionAsync(name: string, args: WmlsValue[], onDialog: DialogResolver,
+                            onExternal?: ExternalResolver): Promise<VMResult> {
         const funcIndex = this.mod.functions.findIndex(f => f.name === name);
         if (funcIndex === -1) {
             return { value: mkInvalid(), output: this.output, steps: 0, error: `Function not found: ${name}`, errorKind: WmlsErrorKind.ExternalFunctionNotFound };
@@ -200,11 +233,14 @@ export class WmlsVM {
         if (this.verifyErrors.length > 0) {
             return { value: mkInvalid(), output: this.output, steps: 0, error: `Verification failed: ${this.verifyErrors[0]}`, errorKind: WmlsErrorKind.VerificationFailed };
         }
+        const argErr = this.argCountError(this.mod.functions[funcIndex], args);
+        if (argErr) { return argErr; }
         if (!this.prepareCall(funcIndex, args)) {
             return { value: mkInvalid(), output: this.output, steps: 0, error: `Invalid function index: ${funcIndex}`, errorKind: WmlsErrorKind.InvalidFunctionArguments };
         }
+        this.asyncExternal = !!onExternal;
         try {
-            const value = await this.runAsync(onDialog);
+            const value = await this.runAsync(onDialog, onExternal);
             return this.finishResult(value);
         } catch (err: any) {
             return { value: mkInvalid(), output: this.output, steps: this.steps, error: err.message, errorKind: classifyVmError(err.message) };
@@ -216,12 +252,17 @@ export class WmlsVM {
      * the args are already popped and pc is past the CALL_LIB (see doCallLib): we
      * await the user's response, push the coerced result, and resume stepping.
      */
-    private async runAsync(onDialog: DialogResolver): Promise<WmlsValue> {
+    private async runAsync(onDialog: DialogResolver, onExternal?: ExternalResolver): Promise<WmlsValue> {
         for (;;) {
             try {
                 const r = this.stepOnce();
                 if (r.done) { return r.value ?? mkString(''); }
             } catch (e) {
+                const ext = e as ExternalSuspend;
+                if (onExternal && ext && ext.wmlsExternal === true) {
+                    this.push(await onExternal(ext.url, ext.funcName, ext.args));
+                    continue;
+                }
                 // Shape, not prototype: instanceof does not survive an ES5
                 // downlevel of a built-in subclass. See DialogSuspend.is().
                 if (DialogSuspend.is(e)) {
@@ -294,7 +335,7 @@ export class WmlsVM {
         if (info.type === 'primary') {
             this.executePrimary(byte, frame);
         } else {
-            this.executePacked(byte, info.packedKind!, info.embeddedValue!, frame);
+            this.executePacked(info.packedKind!, info.embeddedValue!, frame);
         }
         return { done: false };
     }
@@ -341,13 +382,9 @@ export class WmlsVM {
         return this.stack.pop()!;
     }
 
-    private peek(): WmlsValue {
-        if (this.stack.length === 0) { throw new Error('Stack underflow'); }
-        return this.stack[this.stack.length - 1];
-    }
-
     // --- Primary Opcode Execution (0x01-0x3C) ---
 
+    // WMLScript: 10.5 Instructions
     private executePrimary(opcode: number, frame: CallFrame): void {
         const bc = frame.fn.bytecode;
 
@@ -453,16 +490,12 @@ export class WmlsVM {
             }
             case Opcode.INCR_VAR: {
                 const idx = bc[frame.pc++];
-                const v = frame.variables[idx];
-                const n = toNumber(v);
-                frame.variables[idx] = n !== null ? mkInt((n + 1) | 0) : mkInvalid();
+                frame.variables[idx] = this.step(frame.variables[idx], 1);
                 break;
             }
             case Opcode.DECR_VAR: {
                 const idx = bc[frame.pc++];
-                const v = frame.variables[idx];
-                const n = toNumber(v);
-                frame.variables[idx] = n !== null ? mkInt((n - 1) | 0) : mkInvalid();
+                frame.variables[idx] = this.step(frame.variables[idx], -1);
                 break;
             }
             case Opcode.LOAD_CONST: {
@@ -484,83 +517,42 @@ export class WmlsVM {
             case Opcode.CONST_TRUE: this.push(mkBool(true)); break;
             case Opcode.CONST_FALSE: this.push(mkBool(false)); break;
 
-            case Opcode.INCR: {
-                const v = this.pop();
-                const n = toNumber(v);
-                this.push(n !== null ? mkInt((n + 1) | 0) : mkInvalid());
-                break;
-            }
-            case Opcode.DECR: {
-                const v = this.pop();
-                const n = toNumber(v);
-                this.push(n !== null ? mkInt((n - 1) | 0) : mkInvalid());
-                break;
-            }
+            case Opcode.INCR: this.push(this.step(this.pop(), 1)); break;
+            case Opcode.DECR: this.push(this.step(this.pop(), -1)); break;
             case Opcode.ADD_ASG: {
                 const idx = bc[frame.pc++];
                 const val = this.pop();
-                const current = frame.variables[idx];
-                frame.variables[idx] = this.addValues(current, val);
+                frame.variables[idx] = this.binop(Opcode.ADD, frame.variables[idx], val);
                 break;
             }
             case Opcode.SUB_ASG: {
                 const idx = bc[frame.pc++];
                 const val = this.pop();
-                const current = frame.variables[idx];
-                const a = toNumber(current), b = toNumber(val);
-                frame.variables[idx] = (a !== null && b !== null) ? this.numResult(a - b) : mkInvalid();
+                frame.variables[idx] = this.binop(Opcode.SUB, frame.variables[idx], val);
                 break;
             }
             case Opcode.UMINUS: {
-                const v = this.pop();
-                const n = toNumber(v);
-                if (n === null) { this.push(mkInvalid()); }
-                else if (v.type === WmlsType.Float) { this.push(mkFloat(-n)); }
-                else { this.push(mkInt(-n)); }
+                const n = unaryNum(this.pop());
+                this.push(n.type === WmlsType.Float ? this.mkF(-n.value)
+                    : n.type === WmlsType.Integer ? mkInt(-n.value) : n);
                 break;
             }
 
             // === Operator opcodes (0x20-0x3C) — single-byte, no operands ===
 
-            case Opcode.ADD: {
+            case Opcode.ADD: case Opcode.SUB: case Opcode.MUL: case Opcode.DIV:
+            case Opcode.IDIV: case Opcode.REM:
+            case Opcode.B_AND: case Opcode.B_OR: case Opcode.B_XOR:
+            case Opcode.B_LSHIFT: case Opcode.B_RSSHIFT: case Opcode.B_RSZSHIFT:
+            case Opcode.EQ: case Opcode.NE: case Opcode.LT:
+            case Opcode.LE: case Opcode.GT: case Opcode.GE: {
                 const b = this.pop(), a = this.pop();
-                this.push(this.addValues(a, b));
+                this.push(this.binop(opcode, a, b));
                 break;
             }
-            case Opcode.SUB: this.binaryArith((a, b) => a - b); break;
-            case Opcode.MUL: this.binaryArith((a, b) => a * b); break;
-            case Opcode.DIV: this.binaryArith((a, b) => b === 0 ? NaN : a / b); break;
-            case Opcode.IDIV: {
-                const b = this.pop(), a = this.pop();
-                const an = toInteger(a), bn = toInteger(b);
-                this.push(an !== null && bn !== null && bn !== 0 ? mkInt(Math.trunc(an / bn)) : mkInvalid());
+            case Opcode.B_NOT:          /* ~x is x ^ -1, integers only */
+                this.push(this.binop(Opcode.B_XOR, this.pop(), mkInt(-1)));
                 break;
-            }
-            case Opcode.REM: {
-                const b = this.pop(), a = this.pop();
-                const an = toInteger(a), bn = toInteger(b);
-                this.push(an !== null && bn !== null && bn !== 0 ? mkInt(an % bn) : mkInvalid());
-                break;
-            }
-            case Opcode.B_AND: this.binaryBitwise((a, b) => a & b); break;
-            case Opcode.B_OR:  this.binaryBitwise((a, b) => a | b); break;
-            case Opcode.B_XOR: this.binaryBitwise((a, b) => a ^ b); break;
-            case Opcode.B_NOT: {
-                const v = this.pop();
-                const n = toInteger(v);
-                this.push(n !== null ? mkInt(~n) : mkInvalid());
-                break;
-            }
-            case Opcode.B_LSHIFT:   this.binaryBitwise((a, b) => a << b); break;
-            case Opcode.B_RSSHIFT:  this.binaryBitwise((a, b) => a >> b); break;
-            case Opcode.B_RSZSHIFT: this.binaryBitwise((a, b) => a >>> b); break;
-
-            case Opcode.EQ: this.comparison((a, b) => a === b); break;
-            case Opcode.NE: this.comparison((a, b) => a !== b); break;
-            case Opcode.LT: this.comparison((a, b) => a < b); break;
-            case Opcode.LE: this.comparison((a, b) => a <= b); break;
-            case Opcode.GT: this.comparison((a, b) => a > b); break;
-            case Opcode.GE: this.comparison((a, b) => a >= b); break;
 
             case Opcode.NOT: {
                 const v = this.pop();
@@ -654,7 +646,8 @@ export class WmlsVM {
 
     // --- Packed Opcode Execution ---
 
-    private executePacked(byte: number, kind: string, value: number, frame: CallFrame): void {
+    // WMLScript: 10.5 Instructions
+    private executePacked(kind: string, value: number, frame: CallFrame): void {
         switch (kind) {
             case 'LOAD_CONST_S':
                 this.pushConstant(value);
@@ -677,8 +670,7 @@ export class WmlsVM {
             }
             case 'INCR_VAR_S': {
                 const v = frame.variables[value];
-                const n = toNumber(v);
-                frame.variables[value] = n !== null ? mkInt((n + 1) | 0) : mkInvalid();
+                frame.variables[value] = this.step(v, 1);
                 break;
             }
             case 'JUMP_FW_S':
@@ -697,6 +689,9 @@ export class WmlsVM {
 
     // --- Helpers ---
 
+    // WMLScript:
+    //  - 10.5.4 Access To Constants
+    //  - 13 SUPPORT FOR INTEGER ONLY DEVICES
     private pushConstant(index: number): void {
         const c = this.mod.constants[index];
         if (!c) { this.push(mkInvalid()); return; }
@@ -707,7 +702,7 @@ export class WmlsVM {
                 this.push(mkInt(c.value as number));
                 break;
             case ConstantType.FLOAT_32:
-                // §13: integer-only devices cannot load floating-point constants.
+                // WMLScript: 13 SUPPORT FOR INTEGER ONLY DEVICES: integer-only devices cannot load floating-point constants.
                 this.push(this.ctx.floatSupported === false ? mkInvalid() : mkFloat(c.value as number));
                 break;
             case ConstantType.UTF8_STRING:
@@ -720,6 +715,9 @@ export class WmlsVM {
         }
     }
 
+    // WMLScript:
+    //  - 8.4.1 Passing of Function Arguments
+    //  - 8.4.4 Initialisation of Variables
     private doCall(funcIndex: number, currentFrame: CallFrame): void {
         const fn = this.mod.functions[funcIndex];
         if (!fn) { throw new Error(`Invalid function index: ${funcIndex}`); }
@@ -746,14 +744,28 @@ export class WmlsVM {
         });
     }
 
-    /** External (cross-compilation-unit) call. Resolved by the host via ctx.onCallUrl;
-     *  absent ⇒ invalid (the preview transpiler provides full cross-unit calls). §6.4 / WMLS-C-078. */
+    /** WMLScript:
+     *  - 10.5.2.6 Instruction: CALL_URL urlindex findex args
+     *  - 12.3.1.4 External Function Not Found
+     *
+     * External (cross-compilation-unit) call, WMLScript: 6.4 / WMLS-C-078: resolved by
+     *  the host, by ctx.onCallUrl or callFunctionAsync's ExternalResolver.
+     *  With neither the call fails, and a failed external call is fatal
+     *  (WMLScript: 12.3.1.4-12.3.1.6), not invalid. */
     private doCallUrl(urlIndex: number, funcNameIndex: number, nargs: number): void {
         const args: WmlsValue[] = [];
         for (let i = 0; i < nargs; i++) { args.unshift(this.pop()); }
         const url = this.constString(urlIndex);
         const funcName = this.constString(funcNameIndex);
-        this.push(this.ctx.onCallUrl ? this.ctx.onCallUrl(url, funcName, args) : mkInvalid());
+        if (this.ctx.onCallUrl) {
+            this.push(this.ctx.onCallUrl(url, funcName, args));
+            return;
+        }
+        if (this.asyncExternal) {
+            const suspend: ExternalSuspend = { wmlsExternal: true, url, funcName, args };
+            throw suspend;
+        }
+        throw new Error(`External function not found: ${url}#${funcName}`);
     }
 
     private constString(index: number): string {
@@ -761,6 +773,7 @@ export class WmlsVM {
         return c && typeof c.value === 'string' ? c.value : '';
     }
 
+    // WMLScript: 6.4.2.3 Library Functions
     private doCallLib(libIndex: number, funcIndex: number, nargs: number): void {
         const lib = this.stdlibs.get(libIndex);
         if (!lib) { this.push(mkInvalid()); return; }
@@ -776,57 +789,85 @@ export class WmlsVM {
         this.push(result);
     }
 
-    private addValues(a: WmlsValue, b: WmlsValue): WmlsValue {
-        // String concatenation takes precedence
-        if (a.type === WmlsType.String || b.type === WmlsType.String) {
-            return mkString(wmlsToString(a) + wmlsToString(b));
-        }
-        const an = toNumber(a), bn = toNumber(b);
-        if (an === null || bn === null) { return mkInvalid(); }
-        return this.numResult(an + bn);
-    }
-
-    private binaryArith(op: (a: number, b: number) => number): void {
-        const b = this.pop(), a = this.pop();
-        const an = toNumber(a), bn = toNumber(b);
-        if (an === null || bn === null) { this.push(mkInvalid()); return; }
-        const result = op(an, bn);
-        if (!isFinite(result)) { this.push(mkInvalid()); return; }
-        this.push(this.numResult(result));
-    }
-
-    private binaryBitwise(op: (a: number, b: number) => number): void {
-        const b = this.pop(), a = this.pop();
-        const an = toInteger(a), bn = toInteger(b);
-        this.push(an !== null && bn !== null ? mkInt(op(an, bn)) : mkInvalid());
-    }
-
-    private comparison(op: (a: number | string, b: number | string) => boolean): void {
-        const b = this.pop(), a = this.pop();
-        // String comparison
-        if (a.type === WmlsType.String && b.type === WmlsType.String) {
-            this.push(mkBool(op(a.value, b.value)));
-            return;
-        }
-        const an = toNumber(a), bn = toNumber(b);
-        if (an === null || bn === null) {
-            // Invalid comparisons
-            if (a.type === WmlsType.Invalid || b.type === WmlsType.Invalid) {
-                this.push(mkInvalid());
-            } else {
-                this.push(mkBool(false));
-            }
-            return;
-        }
-        this.push(mkBool(op(an, bn)));
-    }
-
-    private numResult(n: number): WmlsValue {
-        if (Number.isInteger(n) && n >= -2147483648 && n <= 2147483647) {
-            return mkInt(n);
-        }
-        // §13: integer-only devices yield invalid for non-integer results.
+    /** A float result: invalid on an integer-only device (WMLScript: 13) or when
+     *  not finite in single precision (mkFloat) */
+    private mkF(n: number): WmlsValue {
         return this.ctx.floatSupported === false ? mkInvalid() : mkFloat(n);
+    }
+
+    /** WMLScript: 6.9 Operator Data Type Conversion Rules
+     *
+     * ++ / -- by rule 5 (WMLScript: 6.9): an integer (invalid on overflow) or a float */
+    private step(v: WmlsValue | undefined, d: number): WmlsValue {
+        const n = unaryNum(v ?? mkString(''));
+        return n.type === WmlsType.Float ? this.mkF(n.value + d)
+            : n.type === WmlsType.Integer ? mkInt(n.value + d) : n;
+    }
+
+    /**
+     * WMLScript:
+     *  - 6.9 Operator Data Type Conversion Rules
+     *  - 6.3.2 Arithmetic Operators
+     *  - 6.3.5 Comparison Operators
+     *  - 12.4.1.2 Integer Overflow
+     *
+     * The binary operators by the conversion rules of WMLScript: 6.9: an
+     * invalid operand gives invalid (WMLScript: 6.3.5: comparisons too); + and the
+     * comparisons work on strings when either operand is one (rule 7);
+     * otherwise both operands convert to integers or floats (rule 5), the
+     * integer-only operators refuse a float (rule 2, WMLScript: 6.8.3), / is always
+     * a float, and an integer result that overflows is invalid (WMLScript: 12.4.1.2).
+     */
+    private binop(op: number, a: WmlsValue, b: WmlsValue): WmlsValue {
+        if (a.type === WmlsType.Invalid || b.type === WmlsType.Invalid) { return mkInvalid(); }
+        const cmp = op === Opcode.EQ || op === Opcode.NE || op === Opcode.LT ||
+                    op === Opcode.LE || op === Opcode.GT || op === Opcode.GE;
+        const order = (x: number | string, y: number | string): WmlsValue => {
+            const c = x < y ? -1 : x > y ? 1 : 0;
+            switch (op) {
+                case Opcode.EQ: return mkBool(c === 0);
+                case Opcode.NE: return mkBool(c !== 0);
+                case Opcode.LT: return mkBool(c < 0);
+                case Opcode.LE: return mkBool(c <= 0);
+                case Opcode.GT: return mkBool(c > 0);
+                default: return mkBool(c >= 0);
+            }
+        };
+        if ((cmp || op === Opcode.ADD) &&
+            (a.type === WmlsType.String || b.type === WmlsType.String)) {
+            const sa = wmlsToString(a), sb = wmlsToString(b);
+            return op === Opcode.ADD ? mkString(sa + sb) : order(sa, sb);
+        }
+        const na = unaryNum(a), nb = unaryNum(b);
+        if (na.type === WmlsType.Invalid || nb.type === WmlsType.Invalid) { return mkInvalid(); }
+        const x = na.value as number, y = nb.value as number;
+        const fl = na.type === WmlsType.Float || nb.type === WmlsType.Float;
+        const intOnly = op === Opcode.IDIV || op === Opcode.REM || op === Opcode.B_AND ||
+                        op === Opcode.B_OR || op === Opcode.B_XOR || op === Opcode.B_LSHIFT ||
+                        op === Opcode.B_RSSHIFT || op === Opcode.B_RSZSHIFT;
+        if (intOnly && fl) { return mkInvalid(); }
+        if (cmp) { return order(x, y); }
+        if (fl || op === Opcode.DIV) {
+            switch (op) {
+                case Opcode.ADD: return this.mkF(x + y);
+                case Opcode.SUB: return this.mkF(x - y);
+                case Opcode.MUL: return this.mkF(x * y);
+                default: return y === 0 ? mkInvalid() : this.mkF(x / y);
+            }
+        }
+        switch (op) {
+            case Opcode.ADD: return mkInt(x + y);
+            case Opcode.SUB: return mkInt(x - y);
+            case Opcode.MUL: return mkInt(x * y);
+            case Opcode.IDIV: return y === 0 ? mkInvalid() : mkInt(Math.trunc(x / y));   // minInt div -1 overflows
+            case Opcode.REM: return y === 0 ? mkInvalid() : mkInt(y === -1 ? 0 : x % y);
+            case Opcode.B_AND: return mkInt(x & y);
+            case Opcode.B_OR: return mkInt(x | y);
+            case Opcode.B_XOR: return mkInt(x ^ y);
+            case Opcode.B_LSHIFT: return mkInt(x << y);
+            case Opcode.B_RSSHIFT: return mkInt(x >> y);
+            default: return mkInt(x >>> y | 0);
+        }
     }
 
     // --- Public introspection for debugger ---

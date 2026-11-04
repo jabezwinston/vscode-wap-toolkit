@@ -17,15 +17,13 @@ export class WmlPreviewPanel {
     private static readonly viewType = 'wmlPreview';
 
     private readonly panel: vscode.WebviewPanel;
-    private readonly extensionUri: vscode.Uri;
     private disposables: vscode.Disposable[] = [];
     private currentDocument: vscode.Uri | undefined;
     // Stack of decks visited via cross-deck navigation, for cross-deck Back.
     private deckHistory: vscode.Uri[] = [];
 
-    private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri) {
+    private constructor(panel: vscode.WebviewPanel) {
         this.panel = panel;
-        this.extensionUri = extensionUri;
 
         // Bridge the preview webview to the WMLScript debug adapter. The webview's
         // wmlsDebugBridge.js posts a 'ready' event on (re)load, so this single
@@ -41,6 +39,11 @@ export class WmlPreviewPanel {
                 this.navigateTo(String(msg.href || ''));
             } else if (msg && msg.type === 'wmlNavigateBack') {
                 this.navigateBack();
+            } else if (msg && msg.type === 'setPhoneFrame') {
+                // The toolbar's Phone/Plain switch is the setting itself; the
+                // configuration listener below re-renders.
+                vscode.workspace.getConfiguration('wap').update(
+                    'wml.preview.phoneFrame', !!msg.show, vscode.ConfigurationTarget.Global);
             }
         }, null, this.disposables);
 
@@ -48,11 +51,17 @@ export class WmlPreviewPanel {
 
         // Listen for document changes
         vscode.workspace.onDidSaveTextDocument((doc) => {
-            const config = vscode.workspace.getConfiguration('wml');
+            const config = vscode.workspace.getConfiguration('wap.wml');
             if (config.get<boolean>('preview.autoRefresh', true) && this.currentDocument) {
                 if (doc.uri.fsPath === this.currentDocument.fsPath) {
                     this.update();
                 }
+            }
+        }, null, this.disposables);
+
+        vscode.workspace.onDidChangeConfiguration((e) => {
+            if (e.affectsConfiguration('wap.wml.preview.phoneFrame')) {
+                this.update();
             }
         }, null, this.disposables);
     }
@@ -81,7 +90,7 @@ export class WmlPreviewPanel {
             }
         );
 
-        WmlPreviewPanel.currentPanel = new WmlPreviewPanel(panel, extensionUri);
+        WmlPreviewPanel.currentPanel = new WmlPreviewPanel(panel);
         WmlPreviewPanel.currentPanel.currentDocument = documentUri;
         WmlPreviewPanel.currentPanel.update();
     }
@@ -93,7 +102,7 @@ export class WmlPreviewPanel {
 
         try {
             const content = fs.readFileSync(this.currentDocument.fsPath, 'utf-8');
-            const config = vscode.workspace.getConfiguration('wml');
+            const config = vscode.workspace.getConfiguration('wap.wml');
             const showFrame = config.get<boolean>('preview.phoneFrame', true);
             const html = wmlToHtml(content, this.currentDocument.fsPath, showFrame);
             this.panel.webview.html = html;

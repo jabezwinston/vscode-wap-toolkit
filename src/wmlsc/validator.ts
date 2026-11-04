@@ -75,8 +75,16 @@ export function validateWmlsText(source: string): WmlsDiag[] {
     }
     if (!ast) { return dedupe(diags); }
 
-    // 3) At most one access-control pragma per compilation unit (§6.7.2).
+    // 3) At most one access-control pragma per compilation unit (WMLScript: 6.7.2).
     checkSingleAccessPragma(source, push);
+
+    // 3b) What the token stream shows and the AST does not keep: literals
+    // past their range, escapes, reserved names, duplicates, pragma order.
+    checkTokens(source, push);
+    if (ast.functions.length > 0 && !ast.functions.some((f) => f.isExtern)) {
+        push(ast.functions[0].loc, 'function'.length,
+            'A compilation unit must have at least one extern function (WMLScript: 6.4.1)', Severity.Error);
+    }
 
     // 4) Semantic checks against the AST.
     try {
@@ -140,6 +148,7 @@ function scanLexical(src: string, push: Pusher): void {
     }
 }
 
+// WMLScript: 6.7.2 Access Control
 function checkSingleAccessPragma(src: string, push: Pusher): void {
     // Count `use access` pragmas via the token stream (so comments don't count);
     // flag the second and beyond.
@@ -152,6 +161,164 @@ function checkSingleAccessPragma(src: string, push: Pusher): void {
                 push({ line: toks[i].line, column: toks[i].column }, 'use access'.length,
                     'A compilation unit may contain at most one access-control pragma', Severity.Error);
             }
+        }
+    }
+}
+
+// --- Token checks (WMLScript: 6.1.5, 6.2.2, 6.4.1, 6.5.4, 6.7, 7.2) -------
+
+/** WMLScript:
+ *  - 7.2 WMLScript Lexical Grammar
+ *  - 6.1.7 Reserved Words
+ *
+ * Reserved words (WMLScript: 7.2): the keywords, those WMLScript does not use, the
+ *  future ones and the literals; none may name a variable, parameter,
+ *  function or `use url` alias */
+const RESERVED = new Set([
+    'access', 'agent', 'break', 'continue', 'div', 'domain', 'else', 'equiv', 'extern', 'for',
+    'function', 'header', 'http', 'if', 'isvalid', 'meta', 'name', 'path', 'return', 'typeof',
+    'url', 'use', 'user', 'var', 'while',
+    'delete', 'in', 'lib', 'new', 'null', 'this', 'void', 'with',
+    'case', 'catch', 'class', 'const', 'debugger', 'default', 'do', 'enum', 'export', 'extends',
+    'finally', 'import', 'private', 'public', 'sizeof', 'struct', 'super', 'switch', 'throw', 'try',
+    'true', 'false', 'invalid',
+]);
+
+/** Tokens a value can end with: a '-' after one is binary */
+const VALUE_END = new Set([
+    TokenType.Identifier, TokenType.IntegerLiteral, TokenType.FloatLiteral, TokenType.StringLiteral,
+    TokenType.True, TokenType.False, TokenType.Invalid, TokenType.RightParen,
+    TokenType.PlusPlus, TokenType.MinusMinus,
+]);
+
+const ASSIGN_OPS = new Set([
+    TokenType.Assign, TokenType.PlusAssign, TokenType.MinusAssign, TokenType.StarAssign,
+    TokenType.SlashAssign, TokenType.DivAssign, TokenType.PercentAssign, TokenType.AmpAssign,
+    TokenType.PipeAssign, TokenType.CaretAssign, TokenType.LShiftAssign, TokenType.RShiftAssign,
+    TokenType.URShiftAssign,
+]);
+
+/** WMLScript: 6.1.5.3 String Literals
+ *
+ * A string literal's escapes (WMLScript: 6.1.5.3): \' \" \\ \/ \b \f \n \r \t, \xhh, \uhhhh, \ooo */
+function badEscape(raw: string): string | null {
+    for (let i = 1; i < raw.length - 1; i++) {
+        if (raw[i] !== '\\') { continue; }
+        const e = raw[++i];
+        if ('\'"\\/bfnrt'.includes(e) || /[0-7]/.test(e)) { continue; }
+        if (e === 'x' && /^[0-9A-Fa-f]{2}$/.test(raw.substr(i + 1, 2))) { i += 2; continue; }
+        if (e === 'u' && /^[0-9A-Fa-f]{4}$/.test(raw.substr(i + 1, 4))) { i += 4; continue; }
+        return '\\' + (e ?? '');
+    }
+    return null;
+}
+
+// WMLScript:
+//  - 6.1.5 Literals
+//  - 6.2.2 Variable Scope and Lifetime
+//  - 6.4.1 Declaration
+//  - 6.5.4 Variable Statement
+//  - 6.7 Pragmas
+function checkTokens(src: string, push: Pusher): void {
+    const toks = new Lexer(src).tokenize();
+    const at = (t: { line: number; column: number }) => ({ line: t.line, column: t.column });
+    const named = (i: number): boolean => toks[i] !== undefined &&
+        (toks[i].type === TokenType.Identifier || RESERVED.has(toks[i].value));
+    const declName = (i: number, what: string): void => {
+        if (named(i) && RESERVED.has(toks[i].value)) {
+            push(at(toks[i]), toks[i].value.length,
+                `"${toks[i].value}" is a reserved word and cannot name a ${what} (WMLScript: 7.2)`, Severity.Error);
+        }
+    };
+    let seenFunction = false;
+    let names = new Set<string>();      // the current function's parameters and variables
+    const aliases = new Set<string>();
+    for (let i = 0; i < toks.length; i++) {
+        const t = toks[i];
+        switch (t.type) {
+            case TokenType.IntegerLiteral: {
+                const raw = t.value;
+                if (/^0[0-7]*[89]/.test(raw)) {
+                    push(at(t), raw.length, `"${raw}" is neither an octal nor a decimal literal (WMLScript: 6.1.5.1)`, Severity.Error);
+                    break;
+                }
+                const v = /^0[xX]/.test(raw) ? parseInt(raw.slice(2), 16)
+                    : /^0[0-7]+$/.test(raw) ? parseInt(raw, 8) : Number(raw);
+                const neg = i > 0 && toks[i - 1].type === TokenType.Minus && !(i > 1 && VALUE_END.has(toks[i - 2].type));
+                if (v > (neg ? 2147483648 : 2147483647)) {
+                    push(at(t), raw.length, `Integer literal ${raw} is past the integer range (WMLScript: 6.1.5.1)`, Severity.Error);
+                }
+                break;
+            }
+            case TokenType.FloatLiteral: {
+                const f = new Float32Array([Number(t.value)])[0];
+                if (!isFinite(f)) {
+                    push(at(t), t.value.length, `Floating-point literal ${t.value} is past the float range (WMLScript: 6.1.5.2)`, Severity.Error);
+                }
+                break;
+            }
+            case TokenType.StringLiteral: {
+                const q = src[t.offset];
+                let end = t.offset + 1;
+                while (end < src.length && src[end] !== q) { end += src[end] === '\\' ? 2 : 1; }
+                const bad = badEscape(src.slice(t.offset, end + 1));
+                if (bad) { push(at(t), end + 1 - t.offset, `Unknown escape sequence ${bad} (WMLScript: 6.1.5.3)`, Severity.Error); }
+                break;
+            }
+            case TokenType.Function: {
+                seenFunction = true;
+                declName(i + 1, 'function');
+                names = new Set<string>();
+                let k = i + 2;
+                if (toks[k]?.type === TokenType.LeftParen) {
+                    for (k++; toks[k] && toks[k].type !== TokenType.RightParen; k++) {
+                        if (named(k)) { declName(k, 'parameter'); names.add(toks[k].value); }
+                    }
+                }
+                break;
+            }
+            case TokenType.Var: {
+                // var a [= init] {, b [= init]} — each init a ConditionalExpression (WMLScript: 6.5.4)
+                let k = i + 1;
+                while (named(k)) {
+                    const n = toks[k];
+                    declName(k, 'variable');
+                    if (names.has(n.value)) {
+                        push(at(n), n.value.length, `"${n.value}" is already declared in this function (WMLScript: 6.2.2)`, Severity.Error);
+                    }
+                    names.add(n.value);
+                    k++;
+                    if (toks[k]?.type === TokenType.Assign) {
+                        let depth = 0;
+                        for (k++; toks[k] && toks[k].type !== TokenType.EOF; k++) {
+                            const tt = toks[k].type;
+                            if (tt === TokenType.LeftParen) { depth++; }
+                            else if (tt === TokenType.RightParen) { depth--; }
+                            else if (depth === 0 && (tt === TokenType.Comma || tt === TokenType.Semicolon)) { break; }
+                            else if (depth === 0 && ASSIGN_OPS.has(tt)) {
+                                push(at(toks[k]), toks[k].value.length || 1,
+                                    'A variable\'s initializer cannot be an assignment: put it in parentheses (WMLScript: 6.5.4)', Severity.Error);
+                            }
+                        }
+                    }
+                    if (toks[k]?.type !== TokenType.Comma) { break; }
+                    k++;
+                }
+                break;
+            }
+            case TokenType.Use:
+                if (seenFunction) {
+                    push(at(t), 'use'.length, 'Pragmas must come before the functions (WMLScript: 6.7)', Severity.Error);
+                }
+                if (toks[i + 1]?.type === TokenType.Url && named(i + 2)) {
+                    declName(i + 2, '"use url" alias');
+                    const a = toks[i + 2].value;
+                    if (aliases.has(a)) {
+                        push(at(toks[i + 2]), a.length, `"use url ${a}" is declared twice (WMLScript: 6.7)`, Severity.Error);
+                    }
+                    aliases.add(a);
+                }
+                break;
         }
     }
 }

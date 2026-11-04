@@ -16,8 +16,9 @@ import {
     EXT_T_0, EXT_T_1, EXT_T_2,
     EXT_0, EXT_1, EXT_2,
     PI, STR_T, OPAQUE,
-    LITERAL, LITERAL_A, LITERAL_C, LITERAL_AC,
-    TAG_HAS_CONTENT, TAG_HAS_ATTRS,
+    LITERAL,
+    TAG_HAS_CONTENT, TAG_HAS_ATTRS, TAG_ID_MASK,
+    ATTR_START_MIN, ATTR_START_MAX, ATTR_VALUE_MIN, MB_UINT_MORE, MB_UINT_BITS,
     WML_TOKEN_TAGS, WML_ATTR_START_TOKENS, WML_ATTR_VALUE_TOKENS,
 } from './tokenTable';
 
@@ -39,7 +40,7 @@ for (const [key, token] of Object.entries(WML_ATTR_VALUE_TOKENS)) {
 
 /**
  * Decode WBXML to WML text.  Strings are read in the document's charset
- * (§5.6 charset field), else `externalCharset` (the Content-Type's, §5.2),
+ * (WBXML 1.3: 5.6 charset field), else `externalCharset` (the Content-Type's, WBXML 1.3: 5.2),
  * else UTF-8.
  */
 export function decodeWbxml(data: Buffer, externalCharset?: string): string {
@@ -50,14 +51,14 @@ export function decodeWbxml(data: Buffer, externalCharset?: string): string {
 class WbxmlDecoder {
     private data: Buffer;
     private pos: number = 0;
-    /** String table: byte range in data (entries are byte offsets, §5.7) */
+    /** String table: byte range in data (entries are byte offsets, WBXML 1.3: 5.7) */
     private tableStart: number = 0;
     private tableEnd: number = 0;
     private charset: string = 'utf-8';
     private indent: number = 0;
     /**
-     * Current code page of each parser state (WBXML §5.8.1). WML defines its
-     * tokens on page 0 only (WML §14.1.2-3), so tokens of another page are
+     * Current code page of each parser state (WBXML 1.3: 5.8.1). WML defines its
+     * tokens on page 0 only (WML 1.3: 14.1.2-14.1.3), so tokens of another page are
      * decoded as unknown ones, never as WML's page-0 tags and attributes.
      */
     private tagPage: number = 0;
@@ -67,9 +68,15 @@ class WbxmlDecoder {
         this.data = data;
     }
 
+    // WBXML 1.3:
+    //  - 5.3 BNF for Document Structure
+    //  - 5.4 Version Number
+    //  - 5.5 Document Public Identifier
+    //  - 5.6 Charset
+    //  - 5.7 String Table
     decode(): string {
         // Header
-        const version = this.readByte();
+        this.readByte(); // version
         const publicId = this.readMbUint32();
         let charset: number | undefined;
         if (publicId === 0) {
@@ -108,6 +115,7 @@ class WbxmlDecoder {
         return result;
     }
 
+    // WBXML 1.3: 5.8.4 Global Tokens
     private decodeToken(token: number): string {
         switch (token) {
             case SWITCH_PAGE:
@@ -179,14 +187,15 @@ class WbxmlDecoder {
         }
     }
 
+    // WBXML 1.3: 5.8.2 Tag Code Space
+    // WML 1.3: 14.3.2 Tag Tokens
     private decodeTag(token: number): string {
         const hasAttrs = (token & TAG_HAS_ATTRS) !== 0;
         const hasContent = (token & TAG_HAS_CONTENT) !== 0;
-        const tagToken = token & 0x3F;
+        const tagToken = token & TAG_ID_MASK;
 
         let tagName: string;
-        if (tagToken === 0x04) {
-            // LITERAL
+        if (tagToken === LITERAL) {
             const offset = this.readMbUint32();
             tagName = this.getStringTableEntry(offset);
         } else {
@@ -290,6 +299,10 @@ class WbxmlDecoder {
         return result;
     }
 
+    // WBXML 1.3: 5.8.3 Attribute Code Space (ATTRSTART and ATTRVALUE)
+    // WML 1.3:
+    //  - 14.3.3 Attribute Start Tokens
+    //  - 14.3.4 Attribute Value Tokens
     private decodeAttributes(): string {
         let result = '';
         let currentAttrName = '';
@@ -346,7 +359,7 @@ class WbxmlDecoder {
                 const offset = this.readMbUint32();
                 currentAttrName = this.getStringTableEntry(offset);
                 currentAttrValue = '';
-            } else if (token >= 0x05 && token <= 0x7F) {
+            } else if (token >= ATTR_START_MIN && token <= ATTR_START_MAX) {
                 // Attribute start token
                 // Flush previous attribute
                 if (currentAttrName) {
@@ -364,7 +377,7 @@ class WbxmlDecoder {
                     currentAttrName = `attr_${token.toString(16)}`;
                     currentAttrValue = '';
                 }
-            } else if (token >= 0x80 && token <= 0xFF) {
+            } else if (token >= ATTR_VALUE_MIN && token <= 0xFF) {
                 // Attribute value token
                 const value = this.attrPage === 0 ? ATTR_VALUE_BY_TOKEN[token] : undefined;
                 if (value) {
@@ -397,6 +410,7 @@ class WbxmlDecoder {
             token === EXT_T_0 || token === EXT_T_1 || token === EXT_T_2;
     }
 
+    // WBXML 1.3: 5.1 Multi-byte Integers
     private readMbUint32(): number {
         // Arithmetic, not `<<`: a shift is 32-bit signed in JavaScript, so a
         // length of 2^31 or more turned negative (an OPAQUE of 0xFFFFFFFA
@@ -405,11 +419,12 @@ class WbxmlDecoder {
         let byte: number;
         do {
             byte = this.readByte();
-            result = result * 128 + (byte & 0x7F);
-        } while (byte & 0x80);
+            result = result * 128 + (byte & MB_UINT_BITS);
+        } while (byte & MB_UINT_MORE);
         return result;
     }
 
+    // WBXML 1.3: 5.8.4.1 Strings
     private readTerminatedString(): string {
         const start = this.pos;
         while (this.pos < this.data.length && this.data[this.pos] !== 0) {
@@ -420,6 +435,7 @@ class WbxmlDecoder {
         return str;
     }
 
+    // WBXML 1.3: 5.7 String Table
     private getStringTableEntry(offset: number): string {
         const start = this.tableStart + offset;
         let end = start;

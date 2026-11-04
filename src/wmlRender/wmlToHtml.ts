@@ -31,22 +31,21 @@ export function wmlToHtml(wmlContent: string, filePath: string, showPhoneFrame: 
     const deckRel = '/' + path.relative(deckRoot, filePath).split(path.sep).join('/');
     const deckDir = deckRel.substring(0, deckRel.lastIndexOf('/') + 1);
 
-    // Extract WCSS stylesheet reference
-    const stylesheetMatch = wmlContent.match(/<\?xml-stylesheet[^?]*href="([^"]+)"[^?]*\?>/);
-    const wcssHref = stylesheetMatch ? stylesheetMatch[1] : null;
-
     // Image resolver for local preview: resolve relative paths against dirName
     const resolveImage = (src: string) => resolveImageSrc(src, dirName);
 
     const { parts: cardHtmlParts, cards } = renderCards(wmlContent, resolveImage);
 
+    // One tab per card that can be addressed by id; preview.js marks the one on
+    // screen.
+    const cardTabs = cards.map((card, index) => !card.id ? '' :
+        `<button data-card="${escapeHtml(card.id)}" onclick="showCard(this.getAttribute('data-card'))"` +
+        ` title="${escapeHtml(card.title)}" aria-pressed="${index === 0}">#${escapeHtml(card.id)}</button>`
+    ).join('');
+
     const phoneFrameStart = showPhoneFrame ? `
     <div class="wap-phone-frame">
-      <div class="phone-header">
-        <span class="phone-signal">&#9679;&#9679;&#9679;&#9675;&#9675;</span>
-        <span class="phone-title" id="card-title">${cards.length > 0 ? escapeHtml(cards[0].title) : 'WML'}</span>
-        <span class="phone-battery">&#9608;&#9608;&#9608;</span>
-      </div>
+      <div class="phone-header" id="card-title">${cards.length > 0 ? escapeHtml(cards[0].title) : 'WML'}</div>
       <div class="phone-screen">` : '<div class="wml-content">';
 
     const phoneFrameEnd = showPhoneFrame ? `
@@ -66,12 +65,15 @@ export function wmlToHtml(wmlContent: string, filePath: string, showPhoneFrame: 
   <meta name="viewport" content="width=device-width, initial-scale=320">
   <title>${escapeHtml(fileName)} - WML Preview</title>
   <style>${getPreviewCSS()}</style>
-  ${wcssHref ? `<link rel="stylesheet" href="${escapeHtml(wcssHref)}">` : ''}
 </head>
 <body>
   <div class="preview-toolbar">
-    <span class="toolbar-title">WML Preview: ${escapeHtml(fileName)}</span>
-    <span class="toolbar-info">${cards.length} card(s)</span>
+    <span class="toolbar-title">${escapeHtml(fileName)}</span>
+    <nav class="toolbar-group card-tabs">${cardTabs}</nav>
+    <div class="toolbar-group" id="frame-switch">
+      <button onclick="wmlSetPhoneFrame(true)" aria-pressed="${showPhoneFrame}">Phone</button>
+      <button onclick="wmlSetPhoneFrame(false)" aria-pressed="${!showPhoneFrame}">Plain</button>
+    </div>
   </div>
   ${phoneFrameStart}
     ${cardHtmlParts.join('\n    ')}

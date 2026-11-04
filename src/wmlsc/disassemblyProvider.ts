@@ -12,6 +12,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import { disassembleWmlsc } from './decoder';
 import { escapeHtml } from '../shared/htmlUtils';
+import { viewerHtml } from '../shared/viewerChrome';
 
 const SCHEME = 'wmlsc-disasm';
 
@@ -46,7 +47,6 @@ export class WmlscDisassemblyProvider implements vscode.TextDocumentContentProvi
 export class WmlscEditorProvider implements vscode.CustomReadonlyEditorProvider {
     public static readonly viewType = 'wml.wmlscDisassembly';
 
-    constructor(private readonly context: vscode.ExtensionContext) {}
 
     openCustomDocument(uri: vscode.Uri): vscode.CustomDocument {
         return { uri, dispose: () => {} };
@@ -58,43 +58,30 @@ export class WmlscEditorProvider implements vscode.CustomReadonlyEditorProvider 
         try {
             const data = fs.readFileSync(document.uri.fsPath);
             const disasm = disassembleWmlsc(Buffer.from(data));
-            webviewPanel.webview.html = this.renderHtml(disasm, document.uri);
+            webviewPanel.webview.html = this.renderHtml(disasm, document.uri, data.length);
         } catch (err: any) {
             webviewPanel.webview.html = `<!DOCTYPE html><html><body><pre>Error: ${escapeHtml(err.message)}</pre></body></html>`;
         }
     }
 
-    private renderHtml(disasm: string, uri: vscode.Uri): string {
+    private renderHtml(disasm: string, uri: vscode.Uri, binarySize: number): string {
         const fileName = uri.fsPath.split('/').pop() || 'disassembly';
         const highlighted = this.highlight(disasm);
+        const functions = (disasm.match(/^; === .*function /gm) || []).length;
 
-        return `<!DOCTYPE html>
-<html>
-<head>
-<style>
-  body {
-    margin: 0;
-    padding: 16px;
-    font-family: var(--vscode-editor-font-family, 'Consolas, Courier New, monospace');
-    font-size: var(--vscode-editor-font-size, 14px);
-    line-height: var(--vscode-editor-line-height, 1.5);
-    background: var(--vscode-editor-background);
-    color: var(--vscode-editor-foreground);
-    white-space: pre;
-    tab-size: 4;
-    -moz-tab-size: 4;
-  }
-  .comment { color: var(--vscode-editorLineNumber-foreground, #6a9955); }
+        return viewerHtml({
+            fileName,
+            facts: ['WMLScript bytecode', `${binarySize} bytes`,
+                    `${functions} function${functions === 1 ? '' : 's'}`],
+            body: `<pre class="viewer-code">${highlighted}</pre>`,
+            css: `
+  .comment, .inline-comment { color: var(--vscode-editorLineNumber-foreground, #6a9955); }
   .heading { color: var(--vscode-editorLineNumber-foreground, #6a9955); font-weight: bold; }
   .address { color: var(--vscode-editorLineNumber-foreground, #858585); }
   .hexbytes { color: var(--vscode-debugTokenExpression-string, #9cdcfe); }
   .mnemonic { color: var(--vscode-symbolIcon-keywordForeground, #569cd6); font-weight: bold; }
-  .operand { color: var(--vscode-debugTokenExpression-number, #b5cea8); }
-  .inline-comment { color: var(--vscode-editorLineNumber-foreground, #6a9955); }
-</style>
-</head>
-<body>${highlighted}</body>
-</html>`;
+  .operand { color: var(--vscode-debugTokenExpression-number, #b5cea8); }`,
+        });
     }
 
     private highlight(text: string): string {
@@ -135,7 +122,7 @@ export function registerWmlscDisassemblyView(context: vscode.ExtensionContext): 
     context.subscriptions.push(
         vscode.window.registerCustomEditorProvider(
             WmlscEditorProvider.viewType,
-            new WmlscEditorProvider(context),
+            new WmlscEditorProvider(),
             { webviewOptions: { retainContextWhenHidden: false } }
         )
     );

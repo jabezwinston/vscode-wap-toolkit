@@ -27,21 +27,24 @@ var wmlVars = {};
 // Substitute $(var:mode) patterns in a string with current variable values.
 // Modes: :escape (URL-encode), :unesc (URL-decode), :noesc (no conversion).
 //
-// Per WAP-191 §10.3.1 (rule WML-S-65): attributes of type %HREF default to the
+// Per WML 1.3: 10.3.1 (rule WML-S-65): attributes of type %HREF default to the
 // `escape` conversion, while everywhere else the default is `noesc`. Only the
 // substituted *value* is escaped — literal URL text (scheme, '/', '?', '&') is
 // left untouched. Pass hrefContext=true when substituting into an href/URL.
 // $$ is a literal dollar sign.
 
-// WML 1.3 §10.3.1 escape conversion: RFC2396 URL-escape, lowercase %xx for
+// WML 1.3: 10.3.1 Variable Substitution: the escape conversion, RFC2396 URL-escape, lowercase %xx for
 // every octet outside the unreserved set, of the value encoded in the charset
-// the deck came in (§9.5.1, as the C browser does): wmlCharsetMap maps code
+// the deck came in (WML 1.3: 9.5.1, as the C browser does): wmlCharsetMap maps code
 // points to bytes for a single-byte charset (from the host's deckContent);
 // null means UTF-8.  A character the charset lacks goes as '?' (%3f).
-// (URL.escapeString keeps its own §10.12 rule: the character's code.)
+// (URL.escapeString keeps its own WMLScript Libraries: 10.12 rule: the character's code.)
 var URL_UNRESERVED = /[A-Za-z0-9\-_.!~*'()]/;
 var wmlCharsetMap = null;
 function pctByte(b) { return '%' + (b < 16 ? '0' : '') + b.toString(16); }
+// WML 1.3:
+//  - 10.3.1 Variable Substitution
+//  - 9.5.1 The Go Element
 function escapeUrlString(val) {
     var out = '';
     for (var i = 0; i < val.length; i++) {
@@ -58,6 +61,8 @@ function escapeUrlString(val) {
     }
     return out;
 }
+// WML 1.3: 10.3.1 Variable Substitution
+//
 // unesc: percent-decode; bytes that are not UTF-8 are read in the deck's
 // charset (Latin-1 without a map).  A malformed value passes through.
 function unescapeUrlString(val) {
@@ -74,15 +79,34 @@ function unescapeUrlString(val) {
     });
 }
 
+// WML 1.3: 10.3.1 Variable Substitution
+//
+// A conversion's name (WML 1.3: 10.3.1): noesc, escape or unesc, and the
+// deprecated forms the same — any case, or the first letter alone (a
+// prefix is taken, as wap-browser-c); null for none or another, which
+// leaves the context's default
+function convName(c) {
+    var words = ['noesc', 'escape', 'unesc'];
+    c = (c || '').toLowerCase();
+    for (var i = 0; c && i < words.length; i++) {
+        if (words[i].indexOf(c) === 0) { return words[i]; }
+    }
+    return null;
+}
+
+// WML 1.3:
+//  - 10.3.1 Variable Substitution
+//  - 10.3.2 Parsing the Variable Substitution Syntax
+//  - 10.3.3 The Dollar-sign Character
 function substituteVars(str, hrefContext) {
     var defaultConv = hrefContext ? 'escape' : 'noesc';
     function convert(val, mode) {
-        var conv = mode || defaultConv;
+        var conv = convName(mode) || defaultConv;
         if (conv === 'escape') { return escapeUrlString(val); }
         if (conv === 'unesc') { return unescapeUrlString(val); }
         return val; // noesc
     }
-    return str.replace(/\$\(([A-Za-z_][A-Za-z0-9_]*)(?::(escape|noesc|unesc))?\)/g, function(m, name, mode) {
+    return str.replace(/\$\(([A-Za-z_][A-Za-z0-9_]*)(?::([A-Za-z]*))?\)/g, function(m, name, mode) {
         if (wmlVars[name] === undefined) { return m; }
         return convert(wmlVars[name], mode);
     }).replace(/\$([A-Za-z_][A-Za-z0-9_]*)/g, function(m, name) {
@@ -90,21 +114,46 @@ function substituteVars(str, hrefContext) {
     }).replace(/\$\$/g, '$');
 }
 
-// Apply setvars from a data-setvars attribute on an element
-function applySetvars(el) {
-    var setvarsAttr = el.getAttribute('data-setvars');
+// WML 1.3:
+//  - 9.4 The Setvar Element
+//  - 12.5.1 The Go Task
+//
+// A task's setvars (data-setvars on its element), substituted now — names
+// too (vdata, WML 1.3: 9.4), all against the variables as they are
+// (WML 1.3: 12.5.1 step 1).  commitSetvars() applies them at the destination card
+// (go step 5, prev step 4); a task that fails never does (WML 1.3: 12.5.5).
+function stageSetvars(el) {
+    var staged = [];
+    var setvarsAttr = el && el.getAttribute('data-setvars');
     if (setvarsAttr) {
         try {
-            var setvars = JSON.parse(setvarsAttr);
-            setvars.forEach(function(sv) {
-                wmlVars[sv.name] = substituteVars(sv.value);
+            JSON.parse(setvarsAttr).forEach(function(sv) {
+                staged.push({ name: substituteVars(sv.name), value: substituteVars(sv.value) });
             });
         } catch(e) { /* ignore parse errors */ }
     }
+    return staged;
+}
+
+// A setvar whose name, substituted, is not a variable's is ignored (WML 1.3: 9.4)
+var WML_VAR_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+// WML 1.3:
+//  - 12.5.1 The Go Task
+//  - 12.5.2 The Prev Task
+//  - 12.5.4 The Refresh Task
+function commitSetvars(staged) {
+    (staged || []).forEach(function(sv) {
+        if (WML_VAR_NAME.test(sv.name)) { wmlVars[sv.name] = sv.value; }
+    });
 }
 
 // ── Postfields & Method helpers ──────────────────────────────────
 
+// WML 1.3:
+//  - 9.3 The Postfield Element
+//  - 9.5.1 The Go Element
+//
 // Extract postfields from a data-postfields attribute on an element
 // Returns an array of {name, value} with variable substitution applied
 function getPostfields(el) {
@@ -112,57 +161,134 @@ function getPostfields(el) {
     if (!attr) { return []; }
     try {
         var pf = JSON.parse(attr);
-        return pf.map(function(f) {
-            return { name: f.name, value: substituteVars(f.value) };
+        return pf.map(function(f) {       // both vdata (WML 1.3: 9.5.1 step 1)
+            return { name: substituteVars(f.name), value: substituteVars(f.value) };
         });
     } catch(e) { return []; }
 }
 
+// WML 1.3: 9.5.1 The Go Element
+//
 // Get the HTTP method from an element's data-method attribute
 function getMethod(el) {
     return (el.getAttribute('data-method') || 'get').toLowerCase();
 }
 
-// The accept-charset of a navigating <go> (WAP-191 §9.5.1), or null
+// WML 1.3: 9.5.1 The Go Element
+//
+// The accept-charset of a navigating <go> (WML 1.3: 9.5.1), or null
 function getAcceptCharset(el) {
     return el ? el.getAttribute('data-accept-charset') : null;
 }
 
-// Whether a navigating element requested sendreferer="true" (WAP-191 §9.5.1)
+// WML 1.3: 9.5.1 The Go Element
+//
+// Whether a navigating element requested sendreferer="true" (WML 1.3: 9.5.1)
 function getSendreferer(el) {
     return el.getAttribute('data-sendreferer') === 'true';
 }
 
+// WML 1.3: 9.5.1 The Go Element
+//
+// Whether a go has cache-control="no-cache": fetched from the origin
+// server, a card of this deck too, with the header (WML 1.3: 9.5.1)
+function getNoCache(el) {
+    return el.getAttribute('data-cache-control') === 'no-cache';
+}
+
 // ── Card Navigation ──────────────────────────────────────────────
 
+// WML 1.3:
+//  - 9.10.1 The Onevent Element
+//  - 9.10.2 Card/Deck Intrinsic Events
+//
 // Process onevent elements (onenterforward, onenterbackward) on a card.
 // Handles both the card-level attribute shorthand (data-onenterforward/data-onenterbackward)
-// and child <onevent> elements (.wml-onevent).
+// and child <onevent> elements (.wml-onevent).  True when the task is a
+// go or a prev: the card entry stops there, before the timer
+// (WML 1.3: 12.5.1 step 8, 12.5.2 step 5); a refresh has started it (WML 1.3: 12.5.4).
+// A go to another card of the deck has entered that one; a go to another
+// deck or a script leaves this card on screen meanwhile.
 function processOnEvent(card, eventType) {
     // Card-level attribute shorthand, e.g. onenterforward="#target"
     var attrHref = card.getAttribute('data-' + eventType);
     if (attrHref) {
         wmlNavigate(attrHref);
-        return;
+        return true;
     }
     // <onevent> child elements
+    var went = false;
     card.querySelectorAll('.wml-onevent[data-type="' + eventType + '"]').forEach(function(e) {
-        applySetvars(e);
         var href = e.getAttribute('data-href');
         var action = e.getAttribute('data-action');
-        if (href) {
-            var postfields = getPostfields(e);
-            var method = getMethod(e);
-            wmlNavigate(href, postfields, method, getSendreferer(e), getAcceptCharset(e));
-        } else if (action === 'refresh') {
-            updateVariables();
-        } else if (action === 'prev') {
-            wmlPrev();
-        }
+        runTask(e, href, action);
+        went = went || !!href || action === 'prev';
     });
+    return went;
 }
 
-function showCard(cardId) {
+// WML 1.3: 12.5 Reference Processing Behaviour - Inter-card Navigation
+//
+// Run the task of a go/prev/refresh element: its setvars are staged
+// before the href and postfields are read (WML 1.3: 12.5.1 step 1).
+// A refresh is an exit and an entry of the card (WML 1.3: 11.7): the timer stops,
+// the setvars apply, `refresh` (default updateVariables) redraws, and the
+// timer resumes (WML 1.3: 12.5.4 step 3).
+function runTask(el, href, action, refresh) {
+    var setvars = stageSetvars(el);
+    if (href) {
+        wmlNavigate(href, getPostfields(el), getMethod(el), getSendreferer(el),
+                    getAcceptCharset(el), setvars, getNoCache(el));
+    } else if (action === 'prev') {
+        wmlPrev(setvars);
+    } else if (action === 'refresh') {
+        var left = timerLeft();
+        commitSetvars(timerExit(setvars));
+        (refresh || updateVariables)();
+        var card = document.querySelector('.wml-card[style*="display: block"], .wml-card[style*="display:block"]');
+        if (card) { processTimers(card, left); }
+    }
+}
+
+// WML 1.3: 10.2 The Newcontext Attribute
+//
+// newcontext (WML 1.3: 10.2): no variables, and no history — the card
+// history here, the environment's deck history through wmlClearHistory()
+function wmlNewContext() {
+    wmlVars = {};
+    wmlHistory = [];
+    if (typeof wmlClearHistory === 'function') { wmlClearHistory(); }
+}
+
+// WML 1.3:
+//  - 5.2 Fragment Anchors
+//  - 12.5.1 The Go Task
+//
+// The deck's card with this id; not another element of it (an id is a
+// core attribute, WML 1.3: 8.9) or of the page
+function findCard(id) {
+    var cards = document.querySelectorAll('.wml-card');
+    for (var i = 0; i < cards.length; i++) {
+        if (cards[i].id === id) { return cards[i]; }
+    }
+    return null;
+}
+
+// WML 1.3:
+//  - 11.5.2 The Card Element
+//  - 10.3.1 Variable Substitution
+//
+// The card's title in the title bar: vdata, substituted (WML 1.3: 10.3.1)
+function showCardTitle(card) {
+    var titleEl = document.getElementById('card-title');
+    if (titleEl && card) {
+        titleEl.textContent = substituteVars(card.getAttribute('data-title') || card.id);
+    }
+}
+
+// WML 1.3: 12.5.1 The Go Task
+function showCard(cardId, setvars) {
+    setvars = timerExit(setvars);
     var currentCard = document.querySelector('.wml-card[style*="display: block"], .wml-card[style*="display:block"]');
 
     if (currentCard) {
@@ -170,51 +296,56 @@ function showCard(cardId) {
         currentCard.style.display = 'none';
     }
 
-    var target = document.getElementById(cardId);
+    // A fragment that names no card: the deck's first card (WML 1.3: 12.5.1 step 4c)
+    var target = findCard(cardId) || document.querySelector('.wml-card');
     if (target) {
-        // Handle newcontext: clear all variables and history
+        commitSetvars(setvars);                 // WML 1.3: 12.5.1 step 5, then 6
         if (target.getAttribute('data-newcontext') === 'true') {
-            wmlVars = {};
-            wmlHistory = [];
+            wmlNewContext();
         }
         target.style.display = 'block';
-        var title = target.getAttribute('data-title') || cardId;
-        var titleEl = document.getElementById('card-title');
-        if (titleEl) titleEl.textContent = title;
+        showCardTitle(target);
 
         // Process onenterforward events
-        processOnEvent(target, 'onenterforward');
+        var went = processOnEvent(target, 'onenterforward');
+        if (target.style.display === 'none') { return; }
 
+        if (!went) { initCardFields(target); }
         updateSoftkeys(target);
         updateVariables();
-        processTimers(target);
+        if (!went) { processTimers(target); }
     }
 }
 
-function wmlPrev() {
+// WML 1.3: 12.5.2 The Prev Task
+function wmlPrev(setvars) {
     if (wmlHistory.length === 0) {
         // Card history exhausted — let the environment step back across decks
         // (browser history / extension-host deck stack) if it provides a hook.
-        if (typeof wmlPrevDeck === 'function') { wmlPrevDeck(); }
+        if (typeof wmlPrevDeck === 'function') { wmlPrevDeck(setvars); }
         return;
     }
+    setvars = timerExit(setvars);
     var prevId = wmlHistory.pop();
     document.querySelectorAll('.wml-card').forEach(function(c) { c.style.display = 'none'; });
-    var target = document.getElementById(prevId);
+    var target = findCard(prevId);
     if (target) {
+        commitSetvars(setvars);                 // WML 1.3: 12.5.2 step 4
         target.style.display = 'block';
-        var title = target.getAttribute('data-title') || prevId;
-        var titleEl = document.getElementById('card-title');
-        if (titleEl) titleEl.textContent = title;
+        showCardTitle(target);
 
         // Process onenterbackward events
-        processOnEvent(target, 'onenterbackward');
+        var went = processOnEvent(target, 'onenterbackward');
+        if (target.style.display === 'none') { return; }
 
+        if (!went) { initCardFields(target); }
         updateSoftkeys(target);
         updateVariables();
+        if (!went) { processTimers(target); }   // WML 1.3: 12.5.2 step 6
     }
 }
 
+// WML 1.3: 12.5.4 The Refresh Task
 function wmlRefresh() {
     var currentCard = document.querySelector('.wml-card[style*="display: block"], .wml-card[style*="display:block"]');
     if (currentCard) {
@@ -229,6 +360,11 @@ function wmlRefresh() {
 
 // ── Softkeys ─────────────────────────────────────────────────────
 
+// WML 1.3:
+//  - 9.7 The Do Element
+//  - 9.6 Card/Deck Task Shadowing
+//  - 11.4 The Template Element
+//
 // Collect do-element actions for a card (used by softkeys and menu)
 function getCardActions(card) {
     var actions = [];
@@ -249,6 +385,7 @@ function closeSoftkeyMenu() {
     if (overlay) overlay.classList.remove('visible');
 }
 
+// WML 1.3: 9.7 The Do Element
 function wmlSoftkeyLeft() {
     var currentCard = document.querySelector('.wml-card[style*="display: block"], .wml-card[style*="display:block"]');
     if (!currentCard) return;
@@ -285,13 +422,10 @@ function showSoftkeyMenu(actions) {
 }
 
 function triggerAction(action) {
-    // Apply setvars from the triggering element before navigating
-    if (action.el) { applySetvars(action.el); }
-    if (action.href) {
-        var postfields = action.el ? getPostfields(action.el) : [];
-        var method = action.el ? getMethod(action.el) : 'get';
-        wmlNavigate(action.href, postfields, method, action.el ? getSendreferer(action.el) : false,
-                    getAcceptCharset(action.el));
+    if (action.el) {
+        runTask(action.el, action.href, action.action);
+    } else if (action.href) {
+        wmlNavigate(action.href, [], 'get', false, null);
     } else if (action.action === 'prev') {
         wmlPrev();
     } else if (action.action === 'refresh') {
@@ -299,6 +433,7 @@ function triggerAction(action) {
     }
 }
 
+// WML 1.3: 9.7 The Do Element
 function wmlSoftkeyRight() {
     closeSoftkeyMenu();
     wmlPrev();
@@ -326,27 +461,74 @@ function updateSoftkeys(card) {
 
 // ── Timers ───────────────────────────────────────────────────────
 
-function processTimers(card) {
-    card.querySelectorAll('.wml-timer').forEach(function(t) {
-        var value = parseInt(t.getAttribute('data-value') || '0', 10);
-        if (value > 0) {
-            setTimeout(function() {
-                if (card.style.display !== 'none') {
-                    card.querySelectorAll('.wml-onevent[data-type="ontimer"]').forEach(function(e) {
-                        wmlNavigate(e.getAttribute('data-href') || '');
-                    });
-                    var ontimer = card.getAttribute('data-ontimer');
-                    if (ontimer) wmlNavigate(ontimer);
-                }
-            }, value * 100);
-        }
-    });
+// The card's timer starts at card entry and stops when the card is left
+// (WML 1.3: 11.7): one runs at a time, so entering a card stops the last.
+// On expiry a named timer's variable is "0", and the card's ontimer runs
+// like any intrinsic event (WML 1.3: 9.10.2).
+var wmlTimer = null;
+var wmlTimerName = '';
+var wmlTimerEnd = 0;
+
+// WML 1.3: 11.7 The Timer Element
+//
+// The running timer's time left, in tenths of a second (0: none running)
+function timerLeft() {
+    return wmlTimer ? Math.max(1, Math.ceil((wmlTimerEnd - Date.now()) / 100)) : 0;
+}
+
+// WML 1.3: 11.7 The Timer Element
+//
+// Card exit, the execution of a task (WML 1.3: 11.7): the timer stops, and a named
+// timer's variable is to be set with the time left.  That assignment is
+// returned ahead of the task's `setvars`, so it is made where they are,
+// after the exit (go step 7, prev step 4) and not when the task fails
+// (WML 1.3: 12.5.5).
+function timerExit(setvars) {
+    var left = timerLeft();
+    clearTimeout(wmlTimer);
+    wmlTimer = null;
+    if (!left || !wmlTimerName) { return setvars; }
+    return [{ name: wmlTimerName, value: String(left) }].concat(setvars || []);
+}
+
+// WML 1.3: 11.7 The Timer Element
+//
+// Card entry: a named timer starts from its variable if that is set,
+// else from its value, which the variable is set to (WML 1.3: 11.7); an unnamed
+// one a refresh resumes starts from the time it had `left`.  A timeout
+// that is not an integer is no timer, and 0 disables it.
+function processTimers(card, left) {
+    clearTimeout(wmlTimer);
+    wmlTimer = null;
+    var t = card.querySelector('.wml-timer');   // one per card (WML 1.3: 11.7)
+    if (!t) { return; }
+    var name = t.getAttribute('data-name') || '';
+    var value = name && wmlVars[name] ? wmlVars[name]
+        : !name && left ? String(left) : substituteVars(t.getAttribute('data-value') || '');
+    if (!/^[0-9]+$/.test(value)) { return; }
+    if (name && wmlVars[name] !== value) {
+        wmlVars[name] = value;
+        updateVariables();
+    }
+    if (+value > 0) {
+        wmlTimerName = name;
+        wmlTimerEnd = Date.now() + value * 100;
+        wmlTimer = setTimeout(function() {
+            wmlTimer = null;
+            if (card.style.display !== 'none') {
+                if (name) { wmlVars[name] = '0'; }
+                processOnEvent(card, 'ontimer');
+            }
+        }, value * 100);
+    }
 }
 
 // ── Variable Display ─────────────────────────────────────────────
 
 /**
- * Apply a WML variable conversion (WML 1.3 §10.3.1).
+ * WML 1.3: 10.3.1 Variable Substitution
+ *
+ * Apply a WML variable conversion (WML 1.3: 10.3.1).
  *
  *   escape  URL-encode the value      $(x:escape) with x="a b" -> "a%20b"
  *   unesc   URL-decode the value      $(x:unesc)  with x="a%20b" -> "a b"
@@ -365,8 +547,9 @@ function wmlConvertValue(value, conversion) {
     return value;
 }
 
+// WML 1.3: 10.3.1 Variable Substitution
 function updateVariables() {
-    // WML 1.3 §10.3.1: substituting an unset variable yields the empty
+    // WML 1.3: 10.3.1 Variable Substitution: substituting an unset variable yields the empty
     // string.
     // wmlTransform emits a "[name]" placeholder for every reference, which is
     // the right thing for the editor preview — an author wants to see which
@@ -375,6 +558,7 @@ function updateVariables() {
     // browser sets WML_STRICT_VARS (see browser.js) to get the spec behaviour;
     // the preview leaves it unset and keeps its placeholders.
     var strictVars = typeof window !== 'undefined' && !!window.WML_STRICT_VARS;
+    showCardTitle(document.querySelector('.wml-card[style*="display: block"], .wml-card[style*="display:block"]'));
     document.querySelectorAll('.wml-var').forEach(function(s) {
         var name = s.getAttribute('data-var');
         if (!name) { return; }
@@ -411,7 +595,7 @@ function updateVariables() {
             for (var i = 0; i < sel.options.length; i++) {
                 if (sel.options[i].selected) indices.push(i + 1);
             }
-            var currentIndices = indices.join(';');
+            var currentIndices = indices.join(';') || '0';
             if (currentIndices !== wmlVars[iname]) {
                 // Restore selection from iname variable
                 var storedIndices = wmlVars[iname].split(';');
@@ -431,10 +615,15 @@ function updateVariables() {
 
 // ── WMLScript argument parsing ───────────────────────────────────
 
+// WMLScript:
+//  - 8.3.3 URL Call Syntax
+//  - 8.3.4 URL Calls and Parameter Passing
+//  - 8.3.5 Character Escaping
+//
 // Parse the argument list of a `script.wmls#func(...)` fragment call.
 // Returns an array of { value, quoted } tokens. `quoted` records whether the
-// token was written as a string literal ('...' or "..."), which WMLScript 1.x
-// §8.3.4 says determines its type: a quoted token is passed as a String, an
+// token was written as a string literal ('...' or "..."), which
+// determines its type (WMLScript: 8.3.4): a quoted token is passed as a String, an
 // unquoted token keeps its literal type (integer/float/boolean/invalid). The
 // caller's convertArgs/convertWmlsArgs coerce only unquoted tokens.
 //
@@ -442,6 +631,13 @@ function updateVariables() {
 // segment that (after trimming surrounding whitespace) is wrapped in matching
 // quotes is a string literal whose inner text is kept verbatim; anything else
 // is an unquoted literal and is trimmed.
+// The arguments of a URL call, "s.wmls#f(1, 'a b', x)" (WMLScript: 8.3.3):
+// each a literal between white space; a quoted one is { quoted: true }.
+// An argument is unescaped once its extent is found (WMLScript: 8.3.5: the call
+// syntax applies to the unescaped fragment), so an escaped %27 or %2C
+// stays inside it.  WML's default escaping leaves ' as it is (RFC 2396
+// unreserved), so a quote ends a string only before a , or the end: a
+// value like "Co's" in '$(v)' keeps its apostrophe (as wap-browser-c).
 function parseWmlScriptArgs(argsStr) {
     var args = [];
     if (!argsStr || argsStr.trim().length === 0) return args;
@@ -452,7 +648,11 @@ function parseWmlScriptArgs(argsStr) {
         var ch = argsStr[i];
         if (inQuote) {
             cur += ch;
-            if (ch === quoteChar) { inQuote = false; }
+            if (ch === quoteChar) {
+                var j = i + 1;
+                while (j < argsStr.length && /\s/.test(argsStr[j])) { j++; }
+                if (j >= argsStr.length || argsStr[j] === ',') { inQuote = false; }
+            }
         } else if (ch === "'" || ch === '"') {
             inQuote = true; quoteChar = ch; cur += ch;
         } else if (ch === ',') {
@@ -467,9 +667,9 @@ function parseWmlScriptArgs(argsStr) {
         var tok = segments[s].trim();
         var first = tok.charAt(0);
         if (tok.length >= 2 && (first === "'" || first === '"') && tok.charAt(tok.length - 1) === first) {
-            args.push({ value: tok.slice(1, -1), quoted: true });
+            args.push({ value: unescapeUrlString(tok.slice(1, -1)), quoted: true });
         } else {
-            args.push({ value: tok, quoted: false });
+            args.push({ value: unescapeUrlString(tok), quoted: false });
         }
     }
     return args;
@@ -488,45 +688,78 @@ var FORMAT_CODES = {
     'm': /[\s\S]/
 };
 
-/** Parse a WML format mask into an array of slot descriptors. */
+/**
+ * WML 1.3: 11.6.3 The Input Element
+ *
+ * Parse a WML format mask into an array of slot descriptors; null when there
+ * is none, or it is not a valid mask (WML 1.3: 11.6.3: only codes, \c and one
+ * *f or nf, n 1-9, at the end), which "user agents must ignore".  An nf
+ * gives n 'opt' slots: up to n characters.
+ */
 function parseFormatSlots(fmt) {
     if (!fmt) return null;
     var slots = [];
-    var i = 0;
-    while (i < fmt.length) {
-        if (fmt[i] === '\\') {
-            // literal escape
-            if (i + 1 < fmt.length) {
-                slots.push({ type: 'literal', char: fmt[i + 1] });
-            }
-            i += 2;
-            continue;
-        }
-        if (fmt[i] === '*') {
-            if (i + 1 < fmt.length && FORMAT_CODES[fmt[i + 1]]) {
+    for (var i = 0; i < fmt.length; i++) {
+        var ch = fmt[i];
+        if (ch === '\\' && i + 1 < fmt.length) {
+            slots.push({ type: 'literal', char: fmt[++i] });
+        } else if ((ch === '*' || (ch >= '1' && ch <= '9')) && FORMAT_CODES[fmt[i + 1]]) {
+            if (i + 2 !== fmt.length) return null;
+            if (ch === '*') {
                 slots.push({ type: 'star', code: fmt[i + 1] });
             }
-            i += 2;
-            continue;
-        }
-        var count = '';
-        while (i < fmt.length && fmt[i] >= '0' && fmt[i] <= '9') {
-            count += fmt[i]; i++;
-        }
-        if (i < fmt.length && FORMAT_CODES[fmt[i]]) {
-            var n = count ? parseInt(count, 10) : 1;
-            for (var j = 0; j < n; j++) {
-                slots.push({ type: 'char', code: fmt[i] });
+            for (var j = 0; ch !== '*' && j < +ch; j++) {
+                slots.push({ type: 'opt', code: fmt[i + 1] });
             }
-            i++;
+            return slots;
+        } else if (FORMAT_CODES[ch]) {
+            slots.push({ type: 'char', code: ch });
         } else {
-            i++;
+            return null;
         }
     }
     return slots.length > 0 ? slots : null;
 }
 
 /**
+ * WML 1.3: 11.6.3 The Input Element
+ *
+ * Does value v fit the mask (WML 1.3: 11.6.3): a character for each slot as its code
+ * takes it (a literal as written), and every slot before a trailing *f or nf
+ * filled.  No mask, or an invalid one: anything does.  "" fits only a lone *f
+ * ("the format mask is implied or a *f format code": M*M requires input).
+ */
+function maskAccepts(fmt, v) {
+    var slots = parseFormatSlots(fmt);
+    if (!slots) return true;
+    if (!v) return slots.length === 1 && slots[0].type === 'star';
+    var i = 0;
+    for (var si = 0; si < slots.length; si++) {
+        var slot = slots[si];
+        if (slot.type === 'star') {
+            for (; i < v.length; i++) { if (!FORMAT_CODES[slot.code].test(v[i])) return false; }
+            return true;
+        }
+        if (i >= v.length) return slot.type === 'opt';
+        if (slot.type === 'literal' ? v[i] !== slot.char : !FORMAT_CODES[slot.code].test(v[i])) {
+            return false;
+        }
+        i++;
+    }
+    return i === v.length;
+}
+
+/** WML 1.3: 11.6.3 The Input Element
+ *
+ * Whether an input takes "" (WML 1.3: 11.6.3): its emptyok, else what its mask implies. */
+function inputEmptyOk(inp) {
+    var e = inp.getAttribute('data-emptyok');
+    return e === 'true' || (e !== 'false' && maskAccepts(inp.getAttribute('data-format') || '', ''));
+}
+
+/**
+ * WML 1.3: 11.6.3 The Input Element
+ *
  * Filter an input value through format mask slots:
  * - Auto-insert literal characters at the right positions.
  * - Drop characters that don't match the expected format code.
@@ -568,7 +801,7 @@ function applyFormatMask(value, slots) {
             si++;
             continue;
         }
-        // type === 'char'
+        // type === 'char' or 'opt'
         if (vi >= value.length) break;
         var ch = value[vi];
         var re = FORMAT_CODES[slot.code];
@@ -584,6 +817,7 @@ function applyFormatMask(value, slots) {
     return result;
 }
 
+// WML 1.3: 11.6.3 The Input Element
 function transformCase(ch, code) {
     if (code === 'A' || code === 'X' || code === 'M') return ch.toUpperCase();
     if (code === 'a' || code === 'x' || code === 'm') return ch.toLowerCase();
@@ -598,22 +832,13 @@ function initWmlEventDelegation() {
         var el = e.target.closest('[data-href]');
         if (el && !el.classList.contains('wml-onevent') && !el.classList.contains('softkey-menu-item')) {
             e.preventDefault();
-            applySetvars(el);
-            var postfields = getPostfields(el);
-            var method = getMethod(el);
-            wmlNavigate(el.getAttribute('data-href'), postfields, method, getSendreferer(el),
-                        getAcceptCharset(el));
+            runTask(el, el.getAttribute('data-href'), null);
             return;
         }
         var actionEl = e.target.closest('[data-action]');
         if (actionEl && !actionEl.classList.contains('wml-onevent')) {
             e.preventDefault();
-            applySetvars(actionEl);
-            var action = actionEl.getAttribute('data-action');
-            if (action === 'prev') wmlPrev();
-            else if (action === 'refresh') {
-                wmlRefresh();
-            }
+            runTask(actionEl, null, actionEl.getAttribute('data-action'), wmlRefresh);
             return;
         }
     });
@@ -638,26 +863,18 @@ function initWmlEventDelegation() {
         if (!el) return;
 
         e.preventDefault();
-        var href = el.getAttribute('data-href');
-        var action = el.getAttribute('data-action');
-        applySetvars(el);
-        if (href) {
-            var postfields = getPostfields(el);
-            var method = getMethod(el);
-            wmlNavigate(href, postfields, method, getSendreferer(el), getAcceptCharset(el));
-        } else if (action === 'prev') {
-            wmlPrev();
-        } else if (action === 'refresh') {
-            wmlRefresh();
-        }
+        runTask(el, el.getAttribute('data-href'), el.getAttribute('data-action'), wmlRefresh);
     });
 }
 
 // ── Common Form Initialization ───────────────────────────────────
 
+// WML 1.3:
+//  - 11.6.3 The Input Element
+//  - 11.6.2.1 The Select Element
 function initWmlFormElements() {
     // Normalize table rows to the declared column count, then apply alignment.
-    // Per WAP-191 §11.8.5: rows with fewer cells than `columns` are padded with
+    // Per WML 1.3: 11.8.5: rows with fewer cells than `columns` are padded with
     // empty cells; rows with more cells aggregate the surplus into the last
     // column, separated by a single inter-word space.
     document.querySelectorAll('.wml-table').forEach(function(table) {
@@ -692,13 +909,13 @@ function initWmlFormElements() {
         });
     });
 
+    // The fields' listeners; their values are set at card entry
+    // (initCardFields)
     document.querySelectorAll('.wml-input').forEach(function(inp) {
         var name = inp.getAttribute('name');
         var fmt = inp.getAttribute('data-format') || '';
         var slots = parseFormatSlots(fmt);
         if (name) {
-            if (wmlVars[name] !== undefined) inp.value = wmlVars[name];
-            else wmlVars[name] = inp.value;
             inp.addEventListener('input', function() {
                 if (slots) {
                     var pos = inp.selectionStart;
@@ -710,98 +927,163 @@ function initWmlFormElements() {
                         inp.setSelectionRange(newPos, newPos);
                     }
                 }
-                wmlVars[name] = inp.value;
+                // WML 1.3: 11.6.3 The Input Element: input that does not fit the mask (too short, or
+                // empty where it is required) is not taken: the variable
+                // keeps its value, and the field says so (wml-invalid)
+                var ok = inp.value ? maskAccepts(fmt, inp.value) : inputEmptyOk(inp);
+                if (ok) { wmlVars[name] = inp.value; }
+                inp.classList[ok ? 'remove' : 'add']('wml-invalid');
                 updateVariables();
             });
         }
     });
-    // Select-list initialisation per WAP-191 §11.6.2.1 (validate operation +
-    // iname/ivalue/name/value precedence; single-choice treats a value
-    // containing ';' as one literal value rather than a list).
     document.querySelectorAll('.wml-select').forEach(function(sel) {
-        var name = sel.getAttribute('name');
-        var iname = sel.getAttribute('data-iname') || '';
-        var ivalue = sel.getAttribute('data-ivalue') || '';
-        var value = sel.getAttribute('data-value');
-        var isMultiple = sel.multiple;
-        var nOpts = sel.options.length;
-
-        // validate(): drop non-integer, out-of-range and duplicate indices.
-        function validateIndices(list) {
-            var seen = {}, out = [];
-            list.forEach(function(s) {
-                s = (s || '').trim();
-                if (!/^[0-9]+$/.test(s)) { return; }
-                var n = parseInt(s, 10);
-                if (n < 1 || n > nOpts || seen[n]) { return; }
-                seen[n] = 1; out.push(n);
-            });
-            return out;
-        }
-        function firstIndexOfValue(v) {
-            for (var i = 0; i < nOpts; i++) { if (sel.options[i].value === v) { return i + 1; } }
-            return 0;
-        }
-        function valuesToIndices(raw) {
-            var out = [];
-            var vals = isMultiple ? raw.split(';') : [raw];  // single-choice: literal value
-            vals.forEach(function(v) {
-                var idx = firstIndexOfValue(v);
-                if (idx && out.indexOf(idx) < 0) { out.push(idx); }
-            });
-            return out;
-        }
-
-        // Step 1 — default option index (precedence: iname, ivalue, name, value).
-        var defIdx = [];
-        if (iname && wmlVars[iname] !== undefined && wmlVars[iname] !== '') {
-            defIdx = validateIndices(wmlVars[iname].split(';'));
-        }
-        if (defIdx.length === 0 && ivalue) {
-            defIdx = validateIndices(ivalue.split(';'));
-        }
-        if (defIdx.length === 0 && name && wmlVars[name] !== undefined && wmlVars[name] !== '') {
-            defIdx = valuesToIndices(wmlVars[name]);
-        }
-        if (defIdx.length === 0 && value) {
-            defIdx = valuesToIndices(value);
-        }
-        if (defIdx.length === 0 && !isMultiple && nOpts > 0) {
-            defIdx = [1];
-        }
-        if (!isMultiple && defIdx.length > 1) { defIdx = [defIdx[0]]; }
-
-        // Step 3 — pre-select option(s) named by the default index.
-        for (var i = 0; i < nOpts; i++) { sel.options[i].selected = false; }
-        defIdx.forEach(function(n) { sel.options[n - 1].selected = true; });
-
-        // Step 2 — commit name / iname variables from the current selection.
-        function commitVars() {
-            var selIdx = [];
-            for (var j = 0; j < nOpts; j++) { if (sel.options[j].selected) { selIdx.push(j + 1); } }
-            if (name) {
-                if (isMultiple) {
-                    var nv = [];
-                    selIdx.forEach(function(n) { var v = sel.options[n - 1].value; if (v !== '') { nv.push(v); } });
-                    wmlVars[name] = nv.join(';');
-                } else {
-                    var sv = selIdx.length ? sel.options[selIdx[0] - 1].value : '';
-                    if (sv === '') { delete wmlVars[name]; } else { wmlVars[name] = sv; }
-                }
-            }
-            if (iname) { wmlVars[iname] = selIdx.join(';'); }
-        }
-        commitVars();
-
         sel.addEventListener('change', function() {
-            commitVars();
+            selectCommitVars(sel);
             updateVariables();
         });
     });
     updateVariables();
 }
 
-// ── WMLScript Dialogs UI (WAP-194 §13) ───────────────────────────
+/**
+ * WML 1.3:
+ *  - 11.6.2.1 The Select Element
+ *  - 11.6.3 The Input Element
+ *
+ * Initialise the inputs and selects within `card`, in card order, as it is
+ * entered (WML 1.3: 11.6.2.1, 11.6.3): not the deck's other cards'.
+ */
+function initCardFields(card) {
+    if (!card) return;
+    card.querySelectorAll('.wml-input, .wml-select').forEach(function(f) {
+        if (f.classList.contains('wml-select')) { initSelect(f); } else { initInput(f); }
+    });
+}
+
+/**
+ * WML 1.3:
+ *  - 11.6.3 The Input Element
+ *  - 10.3 Variables
+ *
+ * An input's initial value (WML 1.3: 11.6.3): its variable's if that fits the mask,
+ * else (the variable unset) its value attribute's, vdata, substituted, if
+ * that fits; else none.  A variable set to "" is not set (WML 1.3: 10.3).
+ */
+function initInput(inp) {
+    var name = inp.getAttribute('name');
+    if (!name) return;
+    var fmt = inp.getAttribute('data-format') || '';
+    var cur = wmlVars[name];
+    inp.classList.remove('wml-invalid');
+    if (cur !== undefined && cur !== '') {
+        if (maskAccepts(fmt, cur)) { inp.value = cur; return; }
+        delete wmlVars[name];
+    }
+    var dflt = inp.getAttribute('value');
+    var v = dflt ? substituteVars(dflt) : '';
+    if (v && maskAccepts(fmt, v)) { wmlVars[name] = v; } else { v = ''; }
+    inp.value = v;
+}
+
+// WML 1.3: 11.6.2.2 The Option Element
+//
+// An option's value: vdata, substituted (WML 1.3: 11.6.2.2)
+function optionValue(o) {
+    return substituteVars(o.value);
+}
+
+// WML 1.3: 11.6.2.1 The Select Element
+//
+// Select-list initialisation per WML 1.3: 11.6.2.1 (validate operation +
+// iname/ivalue/name/value precedence; single-choice treats a value
+// containing ';' as one literal value rather than a list).  value and
+// ivalue are vdata.
+function initSelect(sel) {
+    var name = sel.getAttribute('name');
+    var iname = sel.getAttribute('data-iname') || '';
+    var ivalue = substituteVars(sel.getAttribute('data-ivalue') || '');
+    var value = substituteVars(sel.getAttribute('data-value') || '');
+    var isMultiple = sel.multiple;
+    var nOpts = sel.options.length;
+
+    // validate(): drop non-integer, out-of-range and duplicate indices.
+    function validateIndices(list) {
+        var seen = {}, out = [];
+        list.forEach(function(s) {
+            s = (s || '').trim();
+            if (!/^[0-9]+$/.test(s)) { return; }
+            var n = parseInt(s, 10);
+            if (n < 1 || n > nOpts || seen[n]) { return; }
+            seen[n] = 1; out.push(n);
+        });
+        return out;
+    }
+    function firstIndexOfValue(v) {
+        for (var i = 0; i < nOpts; i++) { if (optionValue(sel.options[i]) === v) { return i + 1; } }
+        return 0;
+    }
+    function valuesToIndices(raw) {
+        var out = [];
+        var vals = isMultiple ? raw.split(';') : [raw];  // single-choice: literal value
+        vals.forEach(function(v) {
+            var idx = firstIndexOfValue(v);
+            if (idx && out.indexOf(idx) < 0) { out.push(idx); }
+        });
+        return out;
+    }
+
+    // Step 1 — default option index (precedence: iname, ivalue, name, value).
+    var defIdx = [];
+    if (iname && wmlVars[iname] !== undefined && wmlVars[iname] !== '') {
+        defIdx = validateIndices(wmlVars[iname].split(';'));
+    }
+    if (defIdx.length === 0 && ivalue) {
+        defIdx = validateIndices(ivalue.split(';'));
+    }
+    if (defIdx.length === 0 && name && wmlVars[name] !== undefined && wmlVars[name] !== '') {
+        defIdx = valuesToIndices(wmlVars[name]);
+    }
+    if (defIdx.length === 0 && value) {
+        defIdx = valuesToIndices(value);
+    }
+    if (defIdx.length === 0 && !isMultiple && nOpts > 0) {
+        defIdx = [1];
+    }
+    if (!isMultiple && defIdx.length > 1) { defIdx = [defIdx[0]]; }
+
+    // Step 3 — pre-select option(s) named by the default index.
+    for (var i = 0; i < nOpts; i++) { sel.options[i].selected = false; }
+    defIdx.forEach(function(n) { sel.options[n - 1].selected = true; });
+
+    // Step 2 — commit name / iname variables from the selection.
+    selectCommitVars(sel);
+}
+
+// WML 1.3: 11.6.2.1 The Select Element
+//
+// A select's name and iname variables from its selection (WML 1.3: 11.6.2.1 step
+// 2): name the chosen options' values (vdata), iname their indices, 0 when
+// none is chosen
+function selectCommitVars(sel) {
+    var name = sel.getAttribute('name');
+    var iname = sel.getAttribute('data-iname') || '';
+    var selIdx = [];
+    for (var j = 0; j < sel.options.length; j++) { if (sel.options[j].selected) { selIdx.push(j + 1); } }
+    if (name) {
+        if (sel.multiple) {
+            var nv = [];
+            selIdx.forEach(function(n) { var v = optionValue(sel.options[n - 1]); if (v !== '') { nv.push(v); } });
+            wmlVars[name] = nv.join(';');
+        } else {
+            var sv = selIdx.length ? optionValue(sel.options[selIdx[0] - 1]) : '';
+            if (sv === '') { delete wmlVars[name]; } else { wmlVars[name] = sv; }
+        }
+    }
+    if (iname) { wmlVars[iname] = selIdx.join(';') || '0'; }
+}
+
+// ── WMLScript Dialogs UI (WMLScript Libraries: 12) ───────────────────────────
 // Shared by the WAP Browser and the WML preview so Dialogs.alert / confirm /
 // prompt look and behave identically in both. Drives the #dialog-overlay modal
 // markup (see wmlToHtml.ts / browserPanel.ts) and returns a Promise resolving to:
@@ -812,6 +1094,7 @@ function initWmlFormElements() {
 // absent (e.g. a stripped-down host) it falls back to native window dialogs.
 var _wmlDialogResolve = null;
 
+// WMLScript Libraries: 12 DIALOGS
 function wmlShowDialog(type, message, opts) {
     opts = opts || {};
     var overlay = (typeof document !== 'undefined') ? document.getElementById('dialog-overlay') : null;
@@ -863,6 +1146,8 @@ function wmlShowDialog(type, message, opts) {
     });
 }
 
+// WMLScript Libraries: 12 DIALOGS
+//
 // Fallback for hosts without the modal markup (e.g. plain stdout). Mirrors the
 // WAP-194 return contract of wmlShowDialog using the browser's native dialogs.
 function wmlNativeDialog(type, message, opts) {

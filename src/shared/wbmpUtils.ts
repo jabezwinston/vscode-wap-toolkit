@@ -6,6 +6,8 @@
  *  Shared WBMP (Wireless Bitmap) parsing and SVG conversion.
  */
 
+import { MB_UINT_MORE, MB_UINT_BITS } from '../wbxml/tokenTable';
+
 /** Read a multi-byte integer from a WBMP buffer (variable-length encoding). */
 function readMultiByte(buf: Buffer, p: { offset: number }): number {
     let result = 0;
@@ -13,8 +15,8 @@ function readMultiByte(buf: Buffer, p: { offset: number }): number {
     do {
         if (p.offset >= buf.length) { return -1; }
         byte = buf[p.offset++];
-        result = (result << 7) | (byte & 0x7F);
-    } while (byte & 0x80);
+        result = (result << 7) | (byte & MB_UINT_BITS);
+    } while (byte & MB_UINT_MORE);
     return result;
 }
 

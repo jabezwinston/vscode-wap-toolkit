@@ -8,7 +8,6 @@ src/**
 *.vsix
 .gitignore
 tsconfig.json
-.eslintrc.js
 *.sh
 idea.md
 wap-browser.md
@@ -16,7 +15,6 @@ docs/**
 nmit/**
 examples/**
 wap-sites/**
-tests/**
 test/**
 *.wmlc
 *.wmlsc

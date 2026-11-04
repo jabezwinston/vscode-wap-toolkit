@@ -14,10 +14,14 @@
 import { CookieJar } from './cookieJar';
 import { FetchResult } from './wapProtocol';
 
-/** Content types a WAP browser advertises, in preference order. */
+/**
+ * Content types a WAP browser advertises, in preference order — the list
+ * wap-browser-c sends. text/plain is there because servers that do not know
+ * .wml serve decks as text/plain, which dispatchContent sniffs.
+ */
 export const WAP_ACCEPT =
     'application/vnd.wap.wmlc, application/vnd.wap.wmlscriptc, ' +
-    'text/vnd.wap.wml, text/vnd.wap.wmlscript, image/vnd.wap.wbmp';
+    'text/vnd.wap.wml, text/vnd.wap.wmlscript, image/vnd.wap.wbmp, text/plain';
 
 export interface HttpRequest {
     method: string;
@@ -48,6 +52,10 @@ export interface HttpFetchOptions {
     cookies?: string;
     cookieJar?: CookieJar;
     referer?: string;
+    /** The charset of a POST's form body, named in its Content-Type (WML 1.3: 9.5.1) */
+    contentCharset?: string;
+    /** Cache-Control: no-cache (<go cache-control="no-cache">, WML 1.3: 9.5.1) */
+    noCache?: boolean;
     userAgent: string;
     timeoutMs?: number;
     maxRedirects?: number;
@@ -63,6 +71,7 @@ function flatten(headers: Record<string, string | string[]>): Record<string, str
     return out;
 }
 
+// RFC 6265: 5.2 The Set-Cookie Header
 function setCookieValues(headers: Record<string, string | string[]>): string[] {
     const raw = headers['set-cookie'];
     if (!raw) { return []; }
@@ -70,6 +79,10 @@ function setCookieValues(headers: Record<string, string | string[]>): string[] {
 }
 
 /**
+ * RFC 9112: 3 Request Line
+ * RFC 9110: 15.4 Redirection 3xx
+ * WML 1.3: 9.5.1 The Go Element
+ *
  * Fetch a resource over HTTP, following up to `maxRedirects` hops.
  *
  * Redirects are re-issued as GET without the original body, and the cookie
@@ -97,8 +110,11 @@ export async function fetchHttp(
         };
         if (cookies) { headers['Cookie'] = cookies; }
         if (opts.referer) { headers['Referer'] = opts.referer; }
-        if (method === 'POST' && body) {
-            headers['Content-Type'] = 'application/x-www-form-urlencoded';
+        if (opts.noCache) { headers['Cache-Control'] = 'no-cache'; }
+        if (method === 'POST' && body !== undefined) {
+            // the body's charset (WML 1.3: 9.5.1), fields or none
+            headers['Content-Type'] = 'application/x-www-form-urlencoded; charset=' +
+                (opts.contentCharset || 'utf-8');
             headers['Content-Length'] = String(Buffer.byteLength(body));
         }
 

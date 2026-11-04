@@ -5,12 +5,12 @@
  *
  *  Character encodings of decks, scripts and the text sent back.
  *
- *  WML 1.3 §6.1 (WML-C-05): every character of an encoding the user agent
+ *  WML 1.3: 6.1 Reference Processing Model (WML-C-05): every character of an encoding the user agent
  *  recognises maps to Unicode.  A deck's encoding comes from, in order: a
  *  byte-order mark, the charset of the Content-Type, the XML declaration,
- *  else UTF-8 (WBXML: its charset field, §5.6; WMLScript bytecode: its
- *  constant pool's, WAP-193 §9.1.3).  Text sent to a server is encoded in
- *  the deck's charset or a <go accept-charset> (§9.5.1).
+ *  else UTF-8 (WBXML: its charset field, WBXML 1.3: 5.6; WMLScript bytecode: its
+ *  constant pool's, WMLScript: 9.1.3).  Text sent to a server is encoded in
+ *  the deck's charset or a <go accept-charset> (WML 1.3: 9.5.1).
  *
  *  Mirrors wap-browser-c src/wap/charset.c.  ES5 only (the Android port runs
  *  this on a KitKat WebView): byte loops and String.fromCharCode, with
@@ -21,6 +21,13 @@
 import { CODE_PAGES } from './charsetTables';
 
 /** Canonical names used here (the preferred MIME names). */
+/** The last Unicode code point, and the UTF-16 surrogates (high, then
+ *  low), which are none */
+export const U_CP_MAX = 0x10FFFF;
+export const U_SUR_HI = 0xD800;
+export const U_SUR_LO = 0xDC00;
+export const U_SUR_END = 0xDFFF;
+
 const ALIASES: { [key: string]: string } = {
     utf8: 'utf-8', unicode11utf8: 'utf-8',
     iso88591: 'iso-8859-1', latin1: 'iso-8859-1', l1: 'iso-8859-1',
@@ -72,7 +79,9 @@ const CP1252_C1 = [
     0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0, 0x017E, 0x0178,
 ];
 
-/** Canonical charset of an IANA name or alias, '' if not recognised. */
+/** WML 1.3: 6.1 Reference Processing Model
+ *
+ * Canonical charset of an IANA name or alias, '' if not recognised. */
 export function charsetByName(name: string): string {
     const key = String(name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
     if (!key) { return ''; }
@@ -86,12 +95,40 @@ export function charsetByName(name: string): string {
     return '';
 }
 
-/** Canonical charset of an IANA MIBenum (WBXML, WSP, WMLScript), '' if none. */
+/** WSP: 8.4.2.8 Accept charset field
+ * WBXML 1.3: 5.6 Charset
+ *
+ * A charset's MIBenum (WSP, WBXML): ISO-8859-1's 4, GB18030's 114 and
+ *  EUC-KR's 38 among their aliases' numbers; UTF-8's 106 when unknown. */
+export function charsetMib(cs: string): number {
+    const preferred: { [cs: string]: number } = { 'iso-8859-1': 4, 'gb18030': 114, 'euc-kr': 38 };
+    if (Object.prototype.hasOwnProperty.call(preferred, cs)) { return preferred[cs]; }
+    for (const mib of Object.keys(MIBS)) {
+        if (MIBS[+mib] === cs) { return +mib; }
+    }
+    return 106;
+}
+
+/** WML 1.3: 9.5.1 The Go Element
+ *
+ * The charset text in `cs` goes back to a server in (WML 1.3: 9.5.1): itself, but
+ *  UTF-8 for none and for UTF-16 / UTF-32, which are sent as UTF-8. */
+export function sentCharset(cs: string): string {
+    return !cs || /^utf-(16|32)/.test(cs) ? 'utf-8' : cs;
+}
+
+/** WBXML 1.3: 5.6 Charset
+ * WSP: 8.4.2.8 Accept charset field
+ *
+ * Canonical charset of an IANA MIBenum (WBXML, WSP, WMLScript), '' if none. */
 export function charsetByMib(mib: number): string {
     return Object.prototype.hasOwnProperty.call(MIBS, mib) ? MIBS[mib] : '';
 }
 
-/** The charset parameter of a Content-Type value, '' if absent or unknown. */
+/** WML 1.3: 6.1 Reference Processing Model
+ * RFC 9110: 8.3.2 Charset
+ *
+ * The charset parameter of a Content-Type value, '' if absent or unknown. */
 export function charsetFromContentType(ct: string): string {
     const m = /;\s*charset\s*=\s*["']?([^;"'\s]+)/i.exec(String(ct || ''));
     return m ? charsetByName(m[1]) : '';
@@ -104,10 +141,14 @@ type Bytes = ArrayLike<number>;
 function fromCodePoint(cp: number): string {
     if (cp < 0x10000) { return String.fromCharCode(cp); }
     cp -= 0x10000;
-    return String.fromCharCode(0xD800 + (cp >> 10), 0xDC00 + (cp & 0x3FF));
+    return String.fromCharCode(U_SUR_HI + (cp >> 10), U_SUR_LO + (cp & 0x3FF));
 }
 
-/** Decode one UTF-8 sequence at b[i]; returns [code point, length], or
+/** RFC 3629:
+ *  - 3 UTF-8 definition
+ *  - 4 Syntax of UTF-8 Byte Sequences
+ *
+ * Decode one UTF-8 sequence at b[i]; returns [code point, length], or
  *  [byte, 1] when it is not valid UTF-8 (the byte is read as ISO-8859-1). */
 function utf8At(b: Bytes, i: number, end: number): [number, number] {
     const c0 = b[i];
@@ -118,12 +159,12 @@ function utf8At(b: Bytes, i: number, end: number): [number, number] {
     }
     if ((c0 & 0xF0) === 0xE0 && cont(1) && cont(2)) {
         const v = ((c0 & 0x0F) << 12) | ((b[i + 1] & 0x3F) << 6) | (b[i + 2] & 0x3F);
-        if (v >= 0x800 && (v < 0xD800 || v > 0xDFFF)) { return [v, 3]; }
+        if (v >= 0x800 && (v < U_SUR_HI || v > U_SUR_END)) { return [v, 3]; }
     }
     if (c0 >= 0xF0 && c0 <= 0xF4 && cont(1) && cont(2) && cont(3)) {
         const v = ((c0 & 0x07) << 18) | ((b[i + 1] & 0x3F) << 12) |
                   ((b[i + 2] & 0x3F) << 6) | (b[i + 3] & 0x3F);
-        if (v >= 0x10000 && v <= 0x10FFFF) { return [v, 4]; }
+        if (v >= 0x10000 && v <= U_CP_MAX) { return [v, 4]; }
     }
     return [c0, 1];
 }
@@ -163,6 +204,8 @@ function hostDecoder(cs: string): { decode(b: Uint8Array): string } | null {
 }
 
 /**
+ * WML 1.3: 6.1 Reference Processing Model
+ *
  * Decode bytes [start, end) of text in charset `cs` (an ASCII-compatible
  * one, or UTF-16/UTF-32).  '' and 'utf-8' read UTF-8 with a byte that is not
  * a valid sequence taken as ISO-8859-1, as period WAP browsers did.
@@ -178,7 +221,7 @@ export function decodeText(b: Bytes, cs: string, start?: number, end?: number): 
         for (; i + unit <= e; i += unit) {
             let v = 0;
             for (let k = 0; k < unit; k++) { v = v * 256 + b[i + (big ? k : unit - 1 - k)]; }
-            if (unit === 4) { out += v > 0 && v <= 0x10FFFF && (v < 0xD800 || v > 0xDFFF) ? fromCodePoint(v) : '?'; }
+            if (unit === 4) { out += v > 0 && v <= U_CP_MAX && (v < U_SUR_HI || v > U_SUR_END) ? fromCodePoint(v) : '?'; }
             else { out += String.fromCharCode(v); }       // surrogate pairs pass through
         }
         return out;
@@ -236,7 +279,9 @@ export function setDefaultCharset(name: string): boolean {
     return true;
 }
 
-/** The encoding pseudo-attribute of an XML declaration at the start, '' if none. */
+/** WML 1.3: 6.1 Reference Processing Model
+ *
+ * The encoding pseudo-attribute of an XML declaration at the start, '' if none. */
 function xmlDeclCharset(b: Bytes): string {
     let head = '';
     for (let i = 0; i < b.length && i < 200; i++) {
@@ -249,7 +294,9 @@ function xmlDeclCharset(b: Bytes): string {
 }
 
 /**
- * The charset of a deck that names none (WML 1.3 §6.1 leaves this error
+ * WML 1.3: 6.1 Reference Processing Model
+ *
+ * The charset of a deck that names none (WML 1.3: 6.1 leaves this error
  * case to the user agent): valid UTF-8, or UTF-8 with a few stray bytes,
  * is UTF-8; otherwise the default (setDefaultCharset), else a guess: high
  * bytes mostly in whole-word runs are Cyrillic — windows-1251 when lower
@@ -282,10 +329,12 @@ export function undeclaredCharset(b: Bytes): string {
 }
 
 /**
+ * WML 1.3: 6.1 Reference Processing Model
+ *
  * Decode a text deck (or WMLScript source, which has no XML declaration):
  * a byte-order mark, then `headerCharset` (from the Content-Type), then the
  * XML declaration, else the undeclared rule.  Returns the text and the
- * charset it was read in — the default for text sent back (§9.5.1).
+ * charset it was read in — the default for text sent back (WML 1.3: 9.5.1).
  */
 export function decodeDeck(b: Bytes, headerCharset?: string): { text: string; charset: string } {
     const n = b.length;
@@ -312,7 +361,9 @@ export function decodeDeck(b: Bytes, headerCharset?: string): { text: string; ch
 
 // ── Encoding text sent to servers ────────────────────────────────────
 
-/** Bytes of code point cp in charset cs, or null when cs lacks it.
+/** WML 1.3: 9.5.1 The Go Element
+ *
+ * Bytes of code point cp in charset cs, or null when cs lacks it.
  *  UTF-8 for '' / utf-8 / UTF-16 / UTF-32; East Asian charsets: ASCII only. */
 export function encodeChar(cp: number, cs: string): number[] | null {
     if (cp < 0x80) { return [cp]; }
@@ -334,6 +385,10 @@ export function encodeChar(cp: number, cs: string): number[] | null {
 }
 
 /**
+ * WML 1.3:
+ *  - 9.5.1 The Go Element
+ *  - 10.3.1 Variable Substitution
+ *
  * Percent-encode s in charset cs: the RFC 2396 unreserved set as is, every
  * other byte %xx (lower case, as escapeUrlString), a character cs lacks as
  * '?' (%3f); `form`: application/x-www-form-urlencoded (space '+').
@@ -342,9 +397,9 @@ export function percentEncode(s: string, cs: string, form?: boolean): string {
     let out = '';
     for (let i = 0; i < s.length; i++) {
         let cp = s.charCodeAt(i);
-        if (cp >= 0xD800 && cp <= 0xDBFF && i + 1 < s.length) {
+        if (cp >= U_SUR_HI && cp < U_SUR_LO && i + 1 < s.length) {
             const lo = s.charCodeAt(i + 1);
-            if (lo >= 0xDC00 && lo <= 0xDFFF) { cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00); i++; }
+            if (lo >= U_SUR_LO && lo <= U_SUR_END) { cp = 0x10000 + ((cp - U_SUR_HI) << 10) + (lo - U_SUR_LO); i++; }
         }
         const ch = s.charAt(i);
         if (cp < 0x80 && /[A-Za-z0-9\-_.!~*'()]/.test(ch)) { out += ch; continue; }

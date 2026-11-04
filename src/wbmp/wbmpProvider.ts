@@ -11,6 +11,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
+import { viewerHtml } from '../shared/viewerChrome';
 
 /**
  * WBMP (Wireless Bitmap) Image Viewer
@@ -20,7 +21,6 @@ import * as path from 'path';
 export class WbmpEditorProvider implements vscode.CustomReadonlyEditorProvider {
     public static readonly viewType = 'wml.wbmpViewer';
 
-    constructor(private readonly context: vscode.ExtensionContext) {}
 
     openCustomDocument(uri: vscode.Uri): vscode.CustomDocument {
         return { uri, dispose: () => {} };
@@ -87,118 +87,65 @@ export class WbmpEditorProvider implements vscode.CustomReadonlyEditorProvider {
         const displayWidth = image.width * scale;
         const displayHeight = image.height * scale;
 
-        return `<!DOCTYPE html>
-<html>
-<head>
-  <style>
-    body {
-      background: #1e1e1e;
-      color: #ccc;
-      font-family: sans-serif;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: 20px;
-    }
-    .info { margin-bottom: 16px; font-size: 14px; }
-    .info span { color: #4fc3f7; }
-    .image-container {
-      background: white;
-      padding: 4px;
-      border: 2px solid #444;
-      image-rendering: pixelated;
-    }
-    svg { display: block; }
-    .controls { margin-top: 12px; }
-    button {
-      background: #333; color: #4fc3f7; border: 1px solid #555;
-      padding: 6px 16px; margin: 0 4px; cursor: pointer; border-radius: 4px;
-    }
-    button:hover { background: #444; }
-    .resize-controls {
-      margin-top: 16px; padding: 12px; background: #252526;
-      border: 1px solid #444; border-radius: 6px; display: inline-flex;
-      align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center;
-    }
-    .resize-modal-content input[type="number"] {
-      width: 60px; background: #333; color: #ccc; border: 1px solid #555;
-      padding: 4px 6px; border-radius: 3px; text-align: center; font-size: 13px;
-    }
-    .ctx-menu {
-      display: none; position: fixed; background: #252526; border: 1px solid #555;
-      border-radius: 4px; padding: 4px 0; z-index: 1000; min-width: 140px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.5);
-    }
-    .ctx-menu.visible { display: block; }
-    .ctx-menu-item {
-      padding: 6px 16px; cursor: pointer; font-size: 13px; color: #ccc;
-    }
-    .ctx-menu-item:hover { background: #094771; color: #fff; }
-    .resize-modal {
-      display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-      background: rgba(0,0,0,0.5); z-index: 2000; align-items: center; justify-content: center;
-    }
-    .resize-modal.visible { display: flex; }
-    .resize-modal-content {
-      background: #252526; border: 1px solid #555; border-radius: 6px;
-      padding: 20px; display: flex; flex-direction: column; align-items: center; gap: 12px;
-    }
-    .resize-modal-content .row { display: flex; align-items: center; gap: 8px; }
-    .resize-modal-content label.aspect { font-size: 13px; cursor: pointer; display: flex; align-items: center; gap: 4px; }
-    .resize-modal-content input[type="checkbox"] { cursor: pointer; }
-  </style>
-</head>
-<body>
-  <div class="info">
-    <strong>${this.escapeHtml(fileName)}</strong><br>
-    Dimensions: <span>${image.width} \u00D7 ${image.height}</span> |
-    Type: <span>WBMP (Type 0)</span> |
-    Size: <span>${image.dataSize} bytes</span>
-  </div>
-  <div class="image-container" id="container">
-    <svg xmlns="http://www.w3.org/2000/svg" width="${displayWidth}" height="${displayHeight}"
-         viewBox="0 0 ${image.width} ${image.height}" shape-rendering="crispEdges">
-      <rect width="${image.width}" height="${image.height}" fill="white"/>
-      ${svgPixels}
-    </svg>
-  </div>
-  <div class="controls">
-    <button onclick="zoom(-1)">Zoom \u2212</button>
-    <button onclick="zoom(1)">Zoom +</button>
+        return viewerHtml({
+            fileName,
+            facts: [`${image.width} × ${image.height}`, 'WBMP Type 0', `${image.dataSize} bytes`],
+            actions: `
+    <button onclick="zoom(-1)" title="Zoom out">−</button>
+    <span class="zoom-level" id="zoomLevel">${scale * 100}%</span>
+    <button onclick="zoom(1)" title="Zoom in">+</button>
     <button onclick="invert()">Invert</button>
-  </div>
-  <div class="ctx-menu" id="ctxMenu">
-    <div class="ctx-menu-item" onclick="showResizeModal()">Resize\u2026</div>
+    <button class="primary" onclick="showResizeModal()">Resize…</button>`,
+            body: `
+  <div class="image-stage">
+    <div class="image-container">
+      <svg xmlns="http://www.w3.org/2000/svg" width="${displayWidth}" height="${displayHeight}"
+           viewBox="0 0 ${image.width} ${image.height}" shape-rendering="crispEdges">
+        <rect width="${image.width}" height="${image.height}" fill="white"/>
+        ${svgPixels}
+      </svg>
+    </div>
   </div>
   <div class="resize-modal" id="resizeModal">
     <div class="resize-modal-content">
-      <div style="font-size:14px;margin-bottom:4px;">Resize Image</div>
       <div class="row">
-        <label>W:</label>
-        <input type="number" id="resW" value="${image.width}" min="1" max="10000">
-        <span>\u00D7</span>
-        <label>H:</label>
-        <input type="number" id="resH" value="${image.height}" min="1" max="10000">
+        <label>Width <input type="number" id="resW" value="${image.width}" min="1" max="10000"></label>
+        <label>Height <input type="number" id="resH" value="${image.height}" min="1" max="10000"></label>
       </div>
-      <div class="row">
-        <label class="aspect"><input type="checkbox" id="keepAspect" checked> Preserve aspect ratio</label>
-      </div>
-      <div class="row">
-        <button onclick="doResize()">Resize &amp; Save</button>
+      <label class="row"><input type="checkbox" id="keepAspect" checked> Keep aspect ratio</label>
+      <div class="row actions">
         <button onclick="hideResizeModal()">Cancel</button>
+        <button class="primary" onclick="doResize()">Resize &amp; save</button>
       </div>
     </div>
-  </div>
-  <script>
+  </div>`,
+            css: `
+  .zoom-level { min-width: 48px; text-align: center; font-size: 12px; }
+  .image-stage { display: flex; justify-content: center; padding: 24px; }
+  .image-container { line-height: 0; border: 1px solid var(--vscode-panel-border, #444); image-rendering: pixelated; }
+  .resize-modal {
+    display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.5); z-index: 10; align-items: center; justify-content: center;
+  }
+  .resize-modal.visible { display: flex; }
+  .resize-modal-content {
+    background: var(--vscode-editorWidget-background, #252526); border: 1px solid var(--vscode-editorWidget-border, #454545);
+    border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 12px;
+  }
+  .row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+  .row.actions { justify-content: flex-end; }
+  .row input[type="number"] {
+    width: 72px; margin-left: 4px; background: var(--vscode-input-background, #3c3c3c); color: var(--vscode-input-foreground, #ccc);
+    border: 1px solid var(--vscode-input-border, transparent); padding: 4px 6px; border-radius: 4px; font: inherit;
+  }`,
+            script: `
     const vscode = acquireVsCodeApi();
     let currentScale = ${scale};
-    let inverted = false;
     const origW = ${image.width}, origH = ${image.height};
 
     const resW = document.getElementById('resW');
     const resH = document.getElementById('resH');
     const keepAspect = document.getElementById('keepAspect');
-    const ctxMenu = document.getElementById('ctxMenu');
     const resizeModal = document.getElementById('resizeModal');
     const aspect = origW / origH;
 
@@ -211,16 +158,6 @@ export class WbmpEditorProvider implements vscode.CustomReadonlyEditorProvider {
       if (keepAspect.checked) {
         resW.value = Math.max(1, Math.round(parseInt(resH.value) * aspect));
       }
-    });
-
-    document.addEventListener('contextmenu', (e) => {
-      e.preventDefault();
-      ctxMenu.style.left = e.clientX + 'px';
-      ctxMenu.style.top = e.clientY + 'px';
-      ctxMenu.classList.add('visible');
-    });
-    document.addEventListener('click', () => {
-      ctxMenu.classList.remove('visible');
     });
 
     function showResizeModal() {
@@ -243,24 +180,17 @@ export class WbmpEditorProvider implements vscode.CustomReadonlyEditorProvider {
     function zoom(dir) {
       currentScale = Math.max(1, Math.min(16, currentScale + dir));
       const svg = document.querySelector('svg');
-      svg.setAttribute('width', ${image.width} * currentScale);
-      svg.setAttribute('height', ${image.height} * currentScale);
+      svg.setAttribute('width', origW * currentScale);
+      svg.setAttribute('height', origH * currentScale);
+      document.getElementById('zoomLevel').textContent = (currentScale * 100) + '%';
     }
     function invert() {
-      inverted = !inverted;
-      const rects = document.querySelectorAll('svg rect');
-      rects.forEach(r => {
+      document.querySelectorAll('svg rect').forEach(r => {
         const fill = r.getAttribute('fill');
         r.setAttribute('fill', fill === 'white' ? 'black' : (fill === 'black' ? 'white' : fill));
       });
-    }
-  </script>
-</body>
-</html>`;
-    }
-
-    private escapeHtml(text: string): string {
-        return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }`,
+        });
     }
 }
 
@@ -271,6 +201,7 @@ interface WbmpImage {
     dataSize: number;
 }
 
+// WAE Media Types: 4.3.1 Multi-byte Integer Format
 function readMultiByte(data: Buffer, pos: { offset: number }): number {
     let result = 0;
     let byte: number;
@@ -282,6 +213,9 @@ function readMultiByte(data: Buffer, pos: { offset: number }): number {
     return result;
 }
 
+// WAE Media Types:
+//  - 4.4 Header Data Structure
+//  - 4.5.1 WBMP Type 0: B/W, Uncompressed Bitmap
 function parseWbmp(data: Buffer): WbmpImage | null {
     const pos = { offset: 0 };
 
@@ -345,6 +279,7 @@ function resizeWbmpImage(src: WbmpImage, newWidth: number, newHeight: number): W
     return { width: newWidth, height: newHeight, pixels, dataSize: 0 };
 }
 
+// WAE Media Types: 4.3.1 Multi-byte Integer Format
 function writeMultiByteEnc(value: number): number[] {
     if (value === 0) { return [0]; }
     const bytes: number[] = [];
@@ -359,6 +294,9 @@ function writeMultiByteEnc(value: number): number[] {
     return bytes;
 }
 
+// WAE Media Types:
+//  - 4.4 Header Data Structure
+//  - 4.5.1 WBMP Type 0: B/W, Uncompressed Bitmap
 function encodeWbmpFromImage(image: WbmpImage): Buffer {
     const parts: number[] = [];
     parts.push(0); // Type 0

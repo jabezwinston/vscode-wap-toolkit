@@ -15,6 +15,8 @@ export const WBXML_VERSION = 0x03;  // WBXML 1.3
 export const WML_PUBLIC_ID = 0x0A;  // WML 1.3 (Table 5: "-//WAPFORUM//DTD WML 1.3//EN")
 export const CHARSET_UTF8 = 0x6A;  // UTF-8
 
+// WBXML 1.3: 7.1 Global Tokens
+//
 // Global tokens
 export const SWITCH_PAGE = 0x00;
 export const END = 0x01;
@@ -37,10 +39,30 @@ export const EXT_2 = 0xC2;
 export const OPAQUE = 0xC3;
 export const LITERAL_AC = 0xC4;
 
-// Tag token flags
+// WBXML 1.3: 5.8.2 Tag Code Space
+//
+// Tag token flags; the low six bits are the tag (LITERAL: a literal name)
 export const TAG_HAS_CONTENT = 0x40;
 export const TAG_HAS_ATTRS = 0x80;
+export const TAG_ID_MASK = 0x3F;
 
+// WBXML 1.3: 5.8.3 Attribute Code Space (ATTRSTART and ATTRVALUE)
+//
+// ATTRSTART tokens are below 128 (from 0x05, past the global tokens),
+// ATTRVALUE tokens from 128
+export const ATTR_START_MIN = 0x05;
+export const ATTR_START_MAX = 0x7F;
+export const ATTR_VALUE_MIN = 0x80;
+
+// WBXML 1.3: 5.1 Multi-byte Integers
+//
+// 7 bits per byte, most significant first, the top bit set on all but
+// the last
+export const MB_UINT_MORE = 0x80;
+export const MB_UINT_BITS = 0x7F;
+
+// WML 1.3: 14.3.2 Tag Tokens
+//
 // WML 1.3 Tag Tokens (Code Page 0)
 export const WML_TAG_TOKENS: Record<string, number> = {
     'a':          0x1C,
@@ -87,6 +109,8 @@ for (const [name, token] of Object.entries(WML_TAG_TOKENS)) {
     WML_TOKEN_TAGS[token] = name;
 }
 
+// WML 1.3: 14.3.3 Attribute Start Tokens
+//
 // WML 1.3 Attribute Start Tokens (Code Page 0)
 export const WML_ATTR_START_TOKENS: Record<string, number> = {
     'accept-charset':       0x05,
@@ -169,6 +193,8 @@ export const WML_ATTR_START_TOKENS: Record<string, number> = {
     'cache-control':        0x5F,
 };
 
+// WML 1.3: 14.3.4 Attribute Value Tokens
+//
 // Attribute Value Tokens
 export const WML_ATTR_VALUE_TOKENS: Record<string, number> = {
     '.com/':        0x85,

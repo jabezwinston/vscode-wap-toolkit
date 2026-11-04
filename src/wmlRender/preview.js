@@ -23,8 +23,10 @@ function wmlsGetVsCodeApi() {
     return null;
 }
 
+// WML 1.3: 9.5.1 The Go Element
+//
 // Encode WML postfields as an application/x-www-form-urlencoded string.
-// Per WML 1.3 §9.x, the field names AND values are URI-escaped (RFC2396) and
+// Per WML 1.3: 9.5.1.x, the field names AND values are URI-escaped (RFC2396) and
 // assembled as name=value pairs joined by '&'. escapeUrlString (from
 // wml-engine.js, concatenated ahead of this file) gives the spec's lowercase
 // %xx encoding, keeping form submission consistent with $(var) href escaping
@@ -64,17 +66,24 @@ function navigateBrowser(href, postfields, method) {
     window.location.href = appendGetParams(href, postfields, method);
 }
 
+// WML 1.3: 12.5.1 The Go Task
+//
 // ── Navigation (preview-specific) ────────────────────────────────
-function wmlNavigate(href, postfields, method) {
+// `setvars` are the task's, staged by wml-engine.js (WML 1.3: 12.5.1): they
+// are applied at the destination card.  This preview reads local files and
+// sees no content types, so a script is known by its .wmls name only.
+function wmlNavigate(href, postfields, method, sendreferer, acceptCharset, setvars) {
     href = substituteVars(href, true);  // %HREF context → default escape conversion
     if (href.startsWith('#')) {
-        showCard(href.substring(1));
+        showCard(href.substring(1), setvars);
     } else if (href.includes('.wmls#')) {
+        commitSetvars(setvars);
         executeWmlScript(href);
     } else if (/\.wml#/.test(href)) {
         // e.g. "index.wml#dashboard" — a card in the current deck
-        showCard(href.substring(href.indexOf('#') + 1));
+        showCard(href.substring(href.indexOf('#') + 1), setvars);
     } else {
+        commitSetvars(setvars);
         // Cross-deck (another .wml file) or external URL. Inside the VS Code
         // side-panel webview, top-level navigation (window.location / form
         // submit) is blocked, so delegate to the extension host, which loads
@@ -88,6 +97,8 @@ function wmlNavigate(href, postfields, method) {
     }
 }
 
+// WML 1.3: 12.5.2 The Prev Task
+//
 // Cross-deck Back hook (called by wml-engine.js's wmlPrev when a deck's card
 // history is exhausted). The side-panel webview delegates to the extension host
 // (which owns the deck stack); a plain browser (HTTP preview) uses native history.
@@ -100,8 +111,27 @@ function wmlPrevDeck() {
     }
 }
 
+// Toolbar card tabs: every card change ends in updateSoftkeys (showCard,
+// wmlPrev, the initial card), so marking the tab there follows all of them.
+var wmlEngineUpdateSoftkeys = updateSoftkeys;
+updateSoftkeys = function(card) {
+    wmlEngineUpdateSoftkeys(card);
+    document.querySelectorAll('.card-tabs button').forEach(function(tab) {
+        tab.setAttribute('aria-pressed', String(tab.getAttribute('data-card') === card.id));
+    });
+};
+
+// Toolbar Phone/Plain switch. The extension host owns the setting and
+// re-renders; the HTTP-server preview has no host to ask.
+function wmlSetPhoneFrame(show) {
+    var vscodeApi = wmlsGetVsCodeApi();
+    if (vscodeApi) { vscodeApi.postMessage({ type: 'setPhoneFrame', show: show }); }
+}
+
+// WMLScript: 8.3.4 URL Calls and Parameter Passing
+//
 // Convert parsed WMLScript call args into JS values for the transpiled runtime.
-// Per WMLScript §8.3.4 a token's literal form decides its type: a quoted token
+// Per WMLScript: 8.3.4 a token's literal form decides its type: a quoted token
 // ('...'/"...") is always a String; only unquoted tokens are coerced to
 // boolean / number / invalid. Accepts both the structured { value, quoted }
 // tokens from parseWmlScriptArgs and bare strings (treated as unquoted).
@@ -113,12 +143,13 @@ function convertWmlsArgs(args) {
         if (s === 'true') return true;
         if (s === 'false') return false;
         if (s === 'invalid') return undefined;
-        var n = Number(s);
-        if (!isNaN(n) && s.length > 0) return n;
+        // a number by the literal grammar (WMLScript: 8.3.3, decimal only)
+        if (/^[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/.test(s)) return Number(s);
         return s;
     });
 }
 
+// WMLScript: 8.3 WMLScript and URLs
 function executeWmlScript(href) {
     // Parse "file.wmls#func(arg1,arg2,...)"
     var hashIdx = href.indexOf('.wmls#');
@@ -181,6 +212,10 @@ function executeWmlScript(href) {
 document.addEventListener('DOMContentLoaded', function() {
     initWmlFormElements();
 
+    // Nothing answers the Phone/Plain switch outside VS Code.
+    var frameSwitch = document.getElementById('frame-switch');
+    if (frameSwitch && !wmlsGetVsCodeApi()) { frameSwitch.parentNode.removeChild(frameSwitch); }
+
     // Handle onpick on select options
     document.querySelectorAll('select').forEach(function(sel) {
         sel.addEventListener('change', function() {
@@ -194,13 +229,16 @@ document.addEventListener('DOMContentLoaded', function() {
 
     var firstCard = document.querySelector('.wml-card');
     if (firstCard) {
+        showCardTitle(firstCard);
         // Fire onenterforward for the initial card (entering the deck goes forward)
-        processOnEvent(firstCard, 'onenterforward');
+        var went = processOnEvent(firstCard, 'onenterforward');
         // If onenterforward navigated away, showCard already handled setup for the
-        // target card. Only run setup here if we're still on the first card.
+        // target card. Only run setup here if we're still on the first card; a go
+        // or prev stops before its timer (WML 1.3: 12.5.1 step 8).
         if (firstCard.style.display !== 'none') {
+            if (!went) { initCardFields(firstCard); }   // WML 1.3: 11.6.2.1, 11.6.3
             updateSoftkeys(firstCard);
-            processTimers(firstCard);
+            if (!went) { processTimers(firstCard); }
             updateVariables();
         }
     }

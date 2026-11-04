@@ -11,12 +11,11 @@ import * as http from 'http';
 import * as path from 'path';
 import * as fs from 'fs';
 import { wmlToHtml } from './wmlToHtml';
-import { transpileWmls, getWmlsRuntime } from './wmlsToJs';
+import { transpileWmls } from './wmlsToJs';
 import { escapeHtml } from '../shared/htmlUtils';
 import { wbmpToSvg } from '../shared/wbmpUtils';
 
 let server: http.Server | undefined;
-let currentPort: number;
 const DEFAULT_PREVIEW_HTTP_PORT = 2703;
 
 export function startPreviewServer(context: vscode.ExtensionContext): string {
@@ -25,7 +24,6 @@ export function startPreviewServer(context: vscode.ExtensionContext): string {
     const bindAddress = config.get<string>('bindAddress', '127.0.0.1') || '127.0.0.1';
     // A wildcard bind is still reachable via localhost; a specific address is not
     const host = (bindAddress === '0.0.0.0' || bindAddress === '::') ? 'localhost' : bindAddress;
-    currentPort = port;
 
     if (server) {
         return `http://${host}:${port}`;
@@ -108,7 +106,7 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse, cont
     const ext = path.extname(filePath).toLowerCase();
 
     if (ext === '.wml') {
-        serveWml(filePath, res, context);
+        serveWml(filePath, res);
     } else if (ext === '.wmls') {
         // Transpile WMLScript to JavaScript and serve for client-side execution
         try {
@@ -121,9 +119,6 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse, cont
             res.writeHead(500, { 'Content-Type': 'text/plain' });
             res.end(`Error transpiling WMLScript: ${err}`);
         }
-    } else if (ext === '.css' || ext === '.wcss') {
-        res.writeHead(200, { 'Content-Type': 'text/css' });
-        res.end(fs.readFileSync(filePath, 'utf-8'));
     } else if (ext === '.wbmp') {
         serveWbmpAsSvg(filePath, res);
     } else {
@@ -131,10 +126,10 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse, cont
     }
 }
 
-function serveWml(filePath: string, res: http.ServerResponse, context: vscode.ExtensionContext): void {
+function serveWml(filePath: string, res: http.ServerResponse): void {
     try {
         const wmlContent = fs.readFileSync(filePath, 'utf-8');
-        const config = vscode.workspace.getConfiguration('wml');
+        const config = vscode.workspace.getConfiguration('wap.wml');
         const showFrame = config.get<boolean>('preview.phoneFrame', true);
         const html = wmlToHtml(wmlContent, filePath, showFrame);
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -174,7 +169,7 @@ function serveDirectoryListing(dirPath: string, urlPath: string, res: http.Serve
         const fileIcon = (name: string): string => {
             const ext = path.extname(name).toLowerCase();
             const icons: Record<string, string> = {
-                '.wml': '📄', '.wmls': '📜', '.wcss': '🎨', '.css': '🎨',
+                '.wml': '📄', '.wmls': '📜',
                 '.wbmp': '🖼️', '.png': '🖼️', '.gif': '🖼️', '.jpg': '🖼️',
             };
             return icons[ext] || '📎';

@@ -18,6 +18,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { Parser } from '../wmlsc/parser';
+import { fround } from '../wmlsc/stdlib';
 import {
     CompilationUnit, FunctionDeclaration,
     Statement, BlockStatement, VariableStatement,
@@ -325,7 +326,7 @@ class CodeGenerator {
             case 'IntegerLiteral':
                 return String(e.value);
             case 'FloatLiteral':
-                return String(e.value);
+                return String(fround(e.value));     // single precision (WMLScript: 6.2.7.2)
             case 'StringLiteral':
                 return JSON.stringify(e.value);
             case 'BooleanLiteral':
@@ -348,6 +349,7 @@ class CodeGenerator {
                 return `__wmls.typeOf(${this.expr(e.operand)})`;
             case 'IsvalidExpression':
                 return `(${this.expr(e.operand)} !== undefined)`;
+
             case 'CallExpression':
                 return `(await ${e.callee}(${e.arguments.map(a => this.expr(a)).join(', ')}))`;
             case 'LibraryCallExpression':
@@ -361,31 +363,42 @@ class CodeGenerator {
         }
     }
 
+    // Every operator runs WMLScript's semantics in the runtime (__wmls.op
+    // and the unary helpers), not JavaScript's.  An assignment is in
+    // parentheses: `(i = i + 1) < 5` must not become `i = ((i + 1) < 5)`.
     private exprAssign(e: AssignmentExpression): string {
         const name = e.left.name;
         const right = this.expr(e.right);
-        if (e.operator === 'div=') {
-            return `${name} = __wmls.div(${name}, ${right})`;
+        if (e.operator === '=') {
+            return `(${name} = ${right})`;
         }
-        return `${name} ${e.operator} ${right}`;
+        const op = e.operator.slice(0, -1);         // "+=" → "+", "div=" → "div"
+        return `(${name} = __wmls.op(${JSON.stringify(op)}, ${name}, ${right}))`;
     }
 
     private exprBinary(e: BinaryExpression): string {
         const left = this.expr(e.left);
         const right = this.expr(e.right);
-        if (e.operator === 'div') {
-            return `__wmls.div(${left}, ${right})`;
+        if (e.operator === '&&' || e.operator === '||') {
+            const fn = e.operator === '&&' ? 'and' : 'or';
+            return `(await __wmls.${fn}(${left}, async () => ${right}))`;
         }
-        return `(${left} ${e.operator} ${right})`;
+        return `__wmls.op(${JSON.stringify(e.operator)}, ${left}, ${right})`;
     }
 
     private exprUnary(e: UnaryExpression): string {
-        return `${e.operator}${this.expr(e.operand)}`;
+        // -2147483648 is minInt: a negative integer literal is folded
+        if (e.operator === '-' && e.operand.type === 'IntegerLiteral') {
+            return `(${-e.operand.value})`;
+        }
+        const fn = { '-': 'neg', '+': 'plus', '~': 'bnot', '!': 'not' }[e.operator as '-' | '+' | '~' | '!'];
+        return `__wmls.${fn}(${this.expr(e.operand)})`;
     }
 
     private exprUpdate(e: UpdateExpression): string {
         const name = e.argument.name;
-        return e.prefix ? `${e.operator}${name}` : `${name}${e.operator}`;
+        const step = `${name} = __wmls.inc(${name}, ${e.operator === '++' ? 1 : -1})`;
+        return e.prefix ? `(${step})` : `__wmls.post(${name}, ${step})`;
     }
 
     private exprLibCall(e: LibraryCallExpression): string {

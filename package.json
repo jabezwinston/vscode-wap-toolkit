@@ -2,7 +2,7 @@
   "name": "wap-toolkit",
   "displayName": "WAP Toolkit",
   "description": "Complete toolkit for WML & WMLScript authoring, preview and debugging",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "publisher": "jabezwinston",
   "license": "Apache-2.0",
   "repository": {
@@ -21,7 +21,6 @@
     "wml",
     "wap",
     "wmlscript",
-    "wcss",
     "wbxml",
     "wireless markup language"
   ],
@@ -47,8 +46,8 @@
         ],
         "configuration": "./language-configuration/wml.language-configuration.json",
         "icon": {
-          "light": "media/wml-icon.png",
-          "dark": "media/wml-icon.png"
+          "light": "media/icons/wml-light.svg",
+          "dark": "media/icons/wml-dark.svg"
         }
       },
       {
@@ -62,23 +61,8 @@
         ],
         "configuration": "./language-configuration/wmlscript.language-configuration.json",
         "icon": {
-          "light": "media/wmls-icon.png",
-          "dark": "media/wmls-icon.png"
-        }
-      },
-      {
-        "id": "wcss",
-        "aliases": [
-          "WCSS",
-          "WAP CSS"
-        ],
-        "extensions": [
-          ".wcss"
-        ],
-        "configuration": "./language-configuration/wcss.language-configuration.json",
-        "icon": {
-          "light": "media/wcss-icon.png",
-          "dark": "media/wcss-icon.png"
+          "light": "media/icons/wmls-light.svg",
+          "dark": "media/icons/wmls-dark.svg"
         }
       },
       {
@@ -92,8 +76,8 @@
           ".wmlc"
         ],
         "icon": {
-          "light": "media/wbxml-icon.png",
-          "dark": "media/wbxml-icon.png"
+          "light": "media/icons/wbxml-light.svg",
+          "dark": "media/icons/wbxml-dark.svg"
         }
       },
       {
@@ -106,8 +90,8 @@
           ".wmlsc"
         ],
         "icon": {
-          "light": "media/wmlsc-icon.png",
-          "dark": "media/wmlsc-icon.png"
+          "light": "media/icons/wmlsc-light.svg",
+          "dark": "media/icons/wmlsc-dark.svg"
         }
       },
       {
@@ -120,8 +104,8 @@
           ".wbmp"
         ],
         "icon": {
-          "light": "media/wbmp-icon.png",
-          "dark": "media/wbmp-icon.png"
+          "light": "media/icons/wbmp.svg",
+          "dark": "media/icons/wbmp.svg"
         }
       },
       {
@@ -141,11 +125,6 @@
         "language": "wmlscript",
         "scopeName": "source.wmlscript",
         "path": "./syntaxes/wmlscript.tmLanguage.json"
-      },
-      {
-        "language": "wcss",
-        "scopeName": "source.wcss",
-        "path": "./syntaxes/wcss.tmLanguage.json"
       },
       {
         "language": "wmlsc-disasm",
@@ -512,8 +491,7 @@
     "copy-assets": "mkdir -p out/wmlRender out/browser out/shared && cp src/wmlRender/*.js src/wmlRender/*.css out/wmlRender/ && cp src/browser/*.js src/browser/*.css src/browser/*.html out/browser/ && cp src/shared/*.js src/shared/*.css out/shared/",
     "compile": "tsc -p ./ && npm run copy-assets",
     "watch": "npm run copy-assets && tsc -watch -p ./",
-    "lint": "eslint src --ext ts",
-    "test": "tsc -p ./ && node --test test/"
+    "test": "tsc -p ./ && node --test test/*.test.js"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",

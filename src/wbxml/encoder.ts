@@ -11,8 +11,9 @@
  */
 import {
     WBXML_VERSION, WML_PUBLIC_ID, CHARSET_UTF8,
-    END, STR_I, ENTITY,
-    TAG_HAS_CONTENT, TAG_HAS_ATTRS,
+    END, STR_I, ENTITY, LITERAL, LITERAL_A, LITERAL_C, LITERAL_AC,
+    EXT_I_0, EXT_I_1, EXT_I_2,
+    TAG_HAS_CONTENT, TAG_HAS_ATTRS, MB_UINT_MORE, MB_UINT_BITS,
     WML_TAG_TOKENS, WML_ATTR_START_TOKENS, WML_ATTR_VALUE_TOKENS,
 } from './tokenTable';
 
@@ -33,6 +34,12 @@ class WbxmlEncoder {
     private stringTable: Map<string, number> = new Map();
     private stringTableBytes: number[] = [];
 
+    // WBXML 1.3:
+    //  - 5.3 BNF for Document Structure
+    //  - 5.4 Version Number
+    //  - 5.5 Document Public Identifier
+    //  - 5.6 Charset
+    //  - 5.7 String Table
     encode(wml: string): Buffer {
         // Strip XML declaration and DOCTYPE
         const bodyStart = wml.indexOf('<wml');
@@ -67,6 +74,7 @@ class WbxmlEncoder {
         return Buffer.from(result);
     }
 
+    // WBXML 1.3: 5.8.2 Tag Code Space
     private encodeNode(node: XmlNode, out: number[]): void {
         if (node.type === 'text') {
             if (node.text) {
@@ -121,6 +129,8 @@ class WbxmlEncoder {
         }
     }
 
+    // WBXML 1.3: 5.8.3 Attribute Code Space (ATTRSTART and ATTRVALUE)
+    // WML 1.3: 14.3.3 Attribute Start Tokens
     private encodeAttributes(attrs: Record<string, string>, out: number[]): void {
         for (const [name, value] of Object.entries(attrs)) {
             // Try combined attr=value token first
@@ -163,7 +173,7 @@ class WbxmlEncoder {
                     }
                 } else {
                     // Unknown attribute - use inline string
-                    out.push(0x04); // LITERAL
+                    out.push(LITERAL);
                     this.addToStringTable(name, out);
                     if (value.length > 0) {
                         this.encodeInlineString(value, out);
@@ -173,6 +183,7 @@ class WbxmlEncoder {
         }
     }
 
+    // WML 1.3: 14.3.4 Attribute Value Tokens
     private encodeAttrValue(value: string, out: number[]): void {
         // Try to find matching value tokens
         let remaining = value;
@@ -223,20 +234,20 @@ class WbxmlEncoder {
                     const escType = match[2];
                     // EXT_I_0 = escaped, EXT_I_1 = unescaped, EXT_I_2 = no transformation.
                     // In text content the default conversion is *none*
-                    // (WML 1.3 §10.3.1 — only URI attribute contexts
+                    // (WML 1.3: 10.3.1 — only URI attribute contexts
                     // default to escape), so unspecified maps to EXT_I_2.
                     if (escType === 'escape') {
-                        this.encodeVariableRef(varName, 0x40, out); // EXT_I_0
+                        this.encodeVariableRef(varName, EXT_I_0, out);
                     } else if (escType === 'unesc') {
-                        this.encodeVariableRef(varName, 0x41, out); // EXT_I_1
+                        this.encodeVariableRef(varName, EXT_I_1, out);
                     } else {
-                        this.encodeVariableRef(varName, 0x42, out); // EXT_I_2 (noesc / default)
+                        this.encodeVariableRef(varName, EXT_I_2, out); // noesc / default
                     }
                 }
             } else if (part.startsWith('$') && part.length > 1) {
                 // Simple variable: $name — default conversion in text is none
                 const varName = part.substring(1);
-                this.encodeVariableRef(varName, 0x42, out); // EXT_I_2
+                this.encodeVariableRef(varName, EXT_I_2, out);
             } else {
                 // Plain text - encode as-is (preserve whitespace)
                 if (part) {
@@ -246,6 +257,7 @@ class WbxmlEncoder {
         }
     }
 
+    // WML 1.3: 14.2.1 Encoding Variables
     private encodeVariableRef(name: string, extToken: number, out: number[]): void {
         out.push(extToken);
         // Write variable name as null-terminated string
@@ -269,6 +281,7 @@ class WbxmlEncoder {
         rarr: 0x2192, euro: 0x20AC,
     };
 
+    // WBXML 1.3: 5.8.4.1 Strings
     private encodeInlineString(str: string, out: number[]): void {
         // Split around entity references so we can handle them individually.
         const entityRe = /(&amp;|&lt;|&gt;|&quot;|&apos;|&([a-zA-Z]+);|&#(\d+);|&#x([0-9a-fA-F]+);)/g;
@@ -333,6 +346,7 @@ class WbxmlEncoder {
         flushText();
     }
 
+    // WBXML 1.3: 5.7 String Table
     private addToStringTable(str: string, out: number[]): void {
         if (!this.stringTable.has(str)) {
             const offset = this.stringTableBytes.length;
@@ -345,13 +359,14 @@ class WbxmlEncoder {
         this.appendMbUint32(out, this.stringTable.get(str)!);
     }
 
+    // WBXML 1.3: 5.8.4.5 Literal Tag or Attribute Name
     private encodeLiteralTag(node: XmlNode, out: number[]): void {
         const hasAttrs = node.attributes && Object.keys(node.attributes).length > 0;
         const hasContent = node.children && node.children.length > 0;
 
-        let tokenByte = 0x04; // LITERAL
-        if (hasContent) { tokenByte = 0x44; } // LITERAL_C
-        if (hasAttrs) { tokenByte = hasContent ? 0xC4 : 0x84; } // LITERAL_AC or LITERAL_A
+        let tokenByte = LITERAL;
+        if (hasContent) { tokenByte = LITERAL_C; }
+        if (hasAttrs) { tokenByte = hasContent ? LITERAL_AC : LITERAL_A; }
 
         out.push(tokenByte);
         this.addToStringTable(node.name!, out);
@@ -369,16 +384,17 @@ class WbxmlEncoder {
         }
     }
 
+    // WBXML 1.3: 5.1 Multi-byte Integers
     private appendMbUint32(target: number[], value: number): void {
-        if (value <= 0x7F) {
+        if (value <= MB_UINT_BITS) {
             target.push(value);
             return;
         }
         const bytes: number[] = [];
-        bytes.push(value & 0x7F);
+        bytes.push(value & MB_UINT_BITS);
         value >>= 7;
         while (value > 0) {
-            bytes.push((value & 0x7F) | 0x80);
+            bytes.push((value & MB_UINT_BITS) | MB_UINT_MORE);
             value >>= 7;
         }
         bytes.reverse();

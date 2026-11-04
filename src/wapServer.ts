@@ -20,16 +20,19 @@ import * as dgram from 'dgram';
 import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as url from 'url';
 import { encodeWbxml } from './wbxml/encoder';
 import { decodeDeck } from './shared/charset';
 import { compileWmls } from './wmlsc/compiler';
 import { xmlEscape } from './shared/htmlUtils';
 import {
     WTP_PDU_INVOKE, WTP_PDU_RESULT, WTP_PDU_ACK, WTP_TID_RESPONDER_BIT,
-    WSP_PDU_CONNECT, WSP_PDU_REPLY, WSP_PDU_DISCONNECT, WSP_PDU_GET, WSP_PDU_POST,
+    WTP_TYPE_SHIFT, WTP_TYPE_MASK, WTP_GTR, WTP_TTR, WTP_CLASS_MASK,
+    WTP_HDR_LEN, WTP_INVOKE_HDR_LEN,
+    WSP_PDU_CONNECT, WSP_PDU_CONNECT_REPLY, WSP_PDU_REPLY, WSP_PDU_DISCONNECT,
+    WSP_PDU_GET, WSP_PDU_POST, WSP_SHORT_INT, WSP_SHORT_INT_BITS,
     WSP_CT, CT_WSP,
     encodeUintvar, decodeUintvar,
+    wspGetRange, httpRange, cutRange, wspLengthHeaders,
 } from './shared/wapProtocol';
 
 // ── Constants ───────────────────────────────────────────────────
@@ -37,7 +40,6 @@ import {
 const DEFAULT_WSP_PORT = 9200;
 const DEFAULT_WSP_CO_PORT = 9201;
 const DEFAULT_HTTP_PORT = 3003; // updated per request
-const DEFAULT_PREVIEW_PORT = 2703; // updated per request
 const DEFAULT_BIND_ADDR = '127.0.0.1'; // loopback unless wap.bindAddress says otherwise
 let bindAddr = DEFAULT_BIND_ADDR;
 
@@ -81,6 +83,7 @@ function log(msg: string): void {
 
 // ── WSP status conversion ───────────────────────────────────────
 
+// WSP: 8.2.3.3 Reply
 function httpToWspStatus(httpStatus: number): number {
     let hi = Math.floor(httpStatus / 100);
     const lo = httpStatus % 100;
@@ -90,7 +93,11 @@ function httpToWspStatus(httpStatus: number): number {
 
 // ── WSP PDU building ────────────────────────────────────────────
 
-function buildWspReply(statusCode: number, contentType: string, body: Buffer): Buffer {
+// WSP: 8.2.3.3 Reply
+//
+// `extra`: more encoded headers after the content type
+function buildWspReply(statusCode: number, contentType: string, body: Buffer,
+                       extra: Buffer = Buffer.alloc(0)): Buffer {
     const pdu: number[] = [];
     pdu.push(WSP_PDU_REPLY);
     pdu.push(httpToWspStatus(statusCode));
@@ -99,13 +106,14 @@ function buildWspReply(statusCode: number, contentType: string, body: Buffer): B
     const hdrs: number[] = [];
     const ctCode = CT_WSP[contentType];
     if (ctCode !== undefined) {
-        hdrs.push(0x80 | ctCode);
+        hdrs.push(WSP_SHORT_INT | ctCode);
     } else {
         for (let i = 0; i < contentType.length; i++) {
             hdrs.push(contentType.charCodeAt(i));
         }
         hdrs.push(0x00);
     }
+    hdrs.push(...extra);
 
     const hdrsLenBuf = encodeUintvar(hdrs.length);
     const result = Buffer.alloc(pdu.length + hdrsLenBuf.length + hdrs.length + body.length);
@@ -117,14 +125,14 @@ function buildWspReply(statusCode: number, contentType: string, body: Buffer): B
     return result;
 }
 
+// WSP: 8.2.2.2 ConnectReply
 function buildWspConnectReply(sessionId: number): Buffer {
-    const pdu: number[] = [0x02]; // WSP ConnectReply
     const sidBuf = encodeUintvar(sessionId);
     const capLen = encodeUintvar(0);
     const hdrLen = encodeUintvar(0);
     const result = Buffer.alloc(1 + sidBuf.length + capLen.length + hdrLen.length);
     let off = 0;
-    result[off++] = 0x02;
+    result[off++] = WSP_PDU_CONNECT_REPLY;
     sidBuf.copy(result, off); off += sidBuf.length;
     capLen.copy(result, off); off += capLen.length;
     hdrLen.copy(result, off);
@@ -133,20 +141,22 @@ function buildWspConnectReply(sessionId: number): Buffer {
 
 // ── WTP PDU building ────────────────────────────────────────────
 
+// WTP: 8.3.2 Result PDU
 function buildWtpResult(tid: number, wspPdu: Buffer): Buffer {
     // Byte 0: CON=0, TYPE=RESULT(0010), GTR=1, TTR=1, RID=0
-    const b0 = (WTP_PDU_RESULT << 3) | (1 << 2) | (1 << 1);
-    const result = Buffer.alloc(3 + wspPdu.length);
+    const b0 = (WTP_PDU_RESULT << WTP_TYPE_SHIFT) | WTP_GTR | WTP_TTR;
+    const result = Buffer.alloc(WTP_HDR_LEN + wspPdu.length);
     result[0] = b0;
-    tid ^= WTP_TID_RESPONDER_BIT;   // the Invoke's, its high bit inverted (WAP-224 §7.8.1)
+    tid ^= WTP_TID_RESPONDER_BIT;   // the Invoke's, its high bit inverted (WTP: 7.8.1)
     result[1] = (tid >> 8) & 0xFF;
     result[2] = tid & 0xFF;
-    wspPdu.copy(result, 3);
+    wspPdu.copy(result, WTP_HDR_LEN);
     return result;
 }
 
 // ── WSP PDU parsing ─────────────────────────────────────────────
 
+// WSP: 8.2.3.1 Get
 function parseWspGet(data: Buffer): string | null {
     if (data.length < 2 || data[0] !== WSP_PDU_GET) { return null; }
     let pos = 1;
@@ -156,6 +166,7 @@ function parseWspGet(data: Buffer): string | null {
     return data.slice(pos, pos + uriLen).toString('ascii');
 }
 
+// WSP: 8.2.3.2 Post
 function parseWspPost(data: Buffer): { url: string; contentType: string; body: Buffer } | null {
     if (data.length < 2 || data[0] !== WSP_PDU_POST) { return null; }
     let pos = 1;
@@ -173,8 +184,8 @@ function parseWspPost(data: Buffer): { url: string; contentType: string; body: B
     let contentType = 'application/x-www-form-urlencoded';
     if (pos < hdrsEnd) {
         const ctByte = data[pos];
-        if (ctByte & 0x80) {
-            const code = ctByte & 0x7F;
+        if (ctByte & WSP_SHORT_INT) {
+            const code = ctByte & WSP_SHORT_INT_BITS;
             contentType = WSP_CT[code] || contentType;
         }
     }
@@ -186,14 +197,15 @@ function parseWspPost(data: Buffer): { url: string; contentType: string; body: B
 
 // ── WTP PDU parsing ─────────────────────────────────────────────
 
+// WTP: 8.3.1 Invoke PDU
 function parseWtpInvoke(data: Buffer): { tid: number; tcl: number; payload: Buffer } | null {
-    if (data.length < 4) { return null; }
+    if (data.length < WTP_INVOKE_HDR_LEN) { return null; }
     const b0 = data[0];
-    const pduType = (b0 >> 3) & 0x0F;
+    const pduType = (b0 >> WTP_TYPE_SHIFT) & WTP_TYPE_MASK;
     if (pduType !== WTP_PDU_INVOKE) { return null; }
     const tid = (data[1] << 8) | data[2];
-    const tcl = data[3] & 0x03;
-    const payload = data.slice(4);
+    const tcl = data[3] & WTP_CLASS_MASK;
+    const payload = data.slice(WTP_INVOKE_HDR_LEN);
     return { tid, tcl, payload };
 }
 
@@ -215,6 +227,19 @@ type ServeResult = { status: number; contentType: string; body: Buffer };
 /**
  * Resolve a URL path to a file on disk, with path traversal protection.
  */
+/**
+ * The path of a WSP request URL. A gateway may send an absolute URL or a bare
+ * path; the placeholder base resolves the latter and is ignored for the former.
+ * The result is percent-encoded, which resolveFilePath decodes.
+ */
+function requestPath(reqUrl: string): string {
+    try {
+        return new URL(reqUrl, 'http://localhost').pathname || '/';
+    } catch {
+        return '/';
+    }
+}
+
 function resolveFilePath(rootDir: string, urlPath: string): string | null {
     const decoded = decodeURIComponent(urlPath);
     const rel = path.normalize(decoded.replace(/^\/+/, '') || '.');
@@ -292,6 +317,22 @@ function serveLocalFile(
     return { status: 404, contentType: 'text/vnd.wap.wml', body: errorWml(404, 'Not Found') };
 }
 
+/**
+ * WSP:
+ *  - 8.4.2.20 Content length field
+ *  - 8.4.2.23 Content range field
+ *  - 8.4.2.42 Range field
+ *
+ * A file's WSP reply cut to the Range its Get asked for (wap-browser-c reads
+ * a long text file a window at a time), with its length headers; an error
+ * goes as it is.
+ */
+function rangedReply(r: ServeResult, getPdu: Buffer): ServeResult & { extra: Buffer } {
+    if (r.status !== 200) { return { ...r, extra: Buffer.alloc(0) }; }
+    const cut = cutRange(r.body, wspGetRange(getPdu));
+    return { ...r, status: cut.status, body: cut.body, extra: wspLengthHeaders(cut) };
+}
+
 function serveRawFile(fullPath: string): ServeResult {
     const ext = path.extname(fullPath).toLowerCase();
     const mime = MIME_TYPES[ext] || 'application/octet-stream';
@@ -301,8 +342,8 @@ function serveRawFile(fullPath: string): ServeResult {
 
 function compileAndServeWml(wmlPath: string): ServeResult {
     try {
-        // Read in the deck's own charset (BOM / XML declaration, WML 1.3
-        // §6.1); the WBXML is UTF-8 whatever it was (§6.1 allows transcoding)
+        // Read in the deck's own charset (BOM / XML declaration, WML 1.3: 6.1);
+        // the WBXML is UTF-8 whatever it was (the same section allows transcoding)
         const wmlContent = decodeDeck(fs.readFileSync(wmlPath)).text;
         const wmlcBuf = encodeWbxml(wmlContent);
         return { status: 200, contentType: 'application/vnd.wap.wmlc', body: wmlcBuf };
@@ -375,6 +416,7 @@ function directoryListing(displayPath: string, fullPath: string, compileForWsp: 
 
 let clSocket: dgram.Socket | undefined;
 
+// WSP: 7.2 Connectionless WSP
 function startConnectionlessWSP(rootDir: string, wspPort: number): void {
     clSocket = dgram.createSocket('udp4');
 
@@ -395,10 +437,9 @@ function startConnectionlessWSP(rootDir: string, wspPort: number): void {
 
             log(`CL GET ${reqUrl} from ${rinfo.address}:${rinfo.port} (TID=${tidByte})`);
 
-            const parsed = url.parse(reqUrl);
-            const urlPath = parsed.pathname || '/';
-            const result = serveLocalFile(rootDir, urlPath, true);
-            const reply = buildWspReply(result.status, result.contentType, result.body);
+            const urlPath = requestPath(reqUrl);
+            const result = rangedReply(serveLocalFile(rootDir, urlPath, true), wspData);
+            const reply = buildWspReply(result.status, result.contentType, result.body, result.extra);
 
             const response = Buffer.alloc(1 + reply.length);
             response[0] = tidByte;
@@ -428,14 +469,15 @@ function startConnectionlessWSP(rootDir: string, wspPort: number): void {
 let coSocket: dgram.Socket | undefined;
 let nextSessionId = 1;
 
+// WSP: 7.1 Connection-Mode WSP
 function startConnectionOrientedWSP(rootDir: string, wspCoPort: number): void {
     coSocket = dgram.createSocket('udp4');
 
     coSocket.on('message', (msg, rinfo) => {
-        if (msg.length < 3) { return; }
+        if (msg.length < WTP_HDR_LEN) { return; }
 
         const b0 = msg[0];
-        const pduType = (b0 >> 3) & 0x0F;
+        const pduType = (b0 >> WTP_TYPE_SHIFT) & WTP_TYPE_MASK;
 
         if (pduType === WTP_PDU_INVOKE) {
             handleInvoke(msg, rinfo, rootDir);
@@ -456,6 +498,10 @@ function startConnectionOrientedWSP(rootDir: string, wspCoPort: number): void {
     });
 }
 
+// WTP: 7.8.2 Procedure at the Responder
+// WSP:
+//  - 7.1.2.1 Session Management Facility
+//  - 7.1.2.3 Method Invocation Facility
 function handleInvoke(data: Buffer, rinfo: dgram.RemoteInfo, rootDir: string): void {
     const invoke = parseWtpInvoke(data);
     if (!invoke) { return; }
@@ -479,8 +525,7 @@ function handleInvoke(data: Buffer, rinfo: dgram.RemoteInfo, rootDir: string): v
         }
         log(`CO POST ${parsed.url} from ${rinfo.address}:${rinfo.port} (${parsed.body.length} bytes)`);
 
-        const urlParsed = url.parse(parsed.url);
-        const urlPath = urlParsed.pathname || '/';
+        const urlPath = requestPath(parsed.url);
         const result = serveLocalFile(rootDir, urlPath, true);
         const replyPdu = buildWspReply(result.status, result.contentType, result.body);
         const wtpResult = buildWtpResult(tid, replyPdu);
@@ -492,10 +537,9 @@ function handleInvoke(data: Buffer, rinfo: dgram.RemoteInfo, rootDir: string): v
         if (!reqUrl) { return; }
         log(`CO GET ${reqUrl} from ${rinfo.address}:${rinfo.port}`);
 
-        const urlParsed = url.parse(reqUrl);
-        const urlPath = urlParsed.pathname || '/';
-        const result = serveLocalFile(rootDir, urlPath, true);
-        const replyPdu = buildWspReply(result.status, result.contentType, result.body);
+        const urlPath = requestPath(reqUrl);
+        const result = rangedReply(serveLocalFile(rootDir, urlPath, true), payload);
+        const replyPdu = buildWspReply(result.status, result.contentType, result.body, result.extra);
         const wtpResult = buildWtpResult(tid, replyPdu);
         coSocket!.send(wtpResult, rinfo.port, rinfo.address);
 
@@ -523,11 +567,22 @@ function startHttpServer(rootDir: string, httpPort: number): void {
         }
 
         if (req.method === 'GET' || req.method === 'HEAD') {
+            // RFC 9110: 14.2 Range: a file's bytes from first to last
+            // (wap-browser-c's text pages), 206 / 416 with Content-Range
             const result = serveLocalFile(rootDir, urlPath, false);
-            res.writeHead(result.status, {
-                'Content-Type': result.contentType,
-                'Content-Length': result.body.length.toString(),
-            });
+            const head: http.OutgoingHttpHeaders = { 'Content-Type': result.contentType };
+            if (result.status === 200) {
+                const cut = cutRange(result.body, httpRange(req.headers.range));
+                if (cut.status !== 200) {
+                    head['Content-Range'] = cut.status === 206
+                        ? `bytes ${cut.first}-${cut.first + cut.body.length - 1}/${cut.size}`
+                        : `bytes */${cut.size}`;
+                }
+                result.status = cut.status;
+                result.body = cut.body;
+            }
+            head['Content-Length'] = result.body.length.toString();
+            res.writeHead(result.status, head);
             if (req.method === 'GET') {
                 res.end(result.body);
             } else {

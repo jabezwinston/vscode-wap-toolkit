@@ -6,6 +6,8 @@
  *  Shared HTML/XML escaping utilities.
  */
 
+import { U_CP_MAX, U_SUR_HI, U_SUR_LO } from './charset';
+
 /** Escape text for safe embedding in HTML. Uses `&#39;` for single quotes (valid in all HTML versions). */
 export function escapeHtml(text: string): string {
     return text
@@ -37,7 +39,7 @@ export function escapeHtmlKeepRefs(text: string): string {
         .replace(/'/g, '&#39;');
 }
 
-/** The HTML 4 named character entities (WML decks use them; WML 1.3 §6.2). */
+/** The HTML 4 named character entities (WML decks use them; WML 1.3: 6.2). */
 const HTML4_ENTITIES: { [name: string]: number } = {
     quot: 34, amp: 38, lt: 60, gt: 62, nbsp: 160, iexcl: 161, cent: 162,
     pound: 163, curren: 164, yen: 165, brvbar: 166, sect: 167, uml: 168,
@@ -91,12 +93,16 @@ const HTML4_ENTITIES: { [name: string]: number } = {
 function fromCodePoint(cp: number): string {
     if (cp < 0x10000) { return String.fromCharCode(cp); }
     cp -= 0x10000;
-    return String.fromCharCode(0xD800 + (cp >> 10), 0xDC00 + (cp & 0x3FF));
+    return String.fromCharCode(U_SUR_HI + (cp >> 10), U_SUR_LO + (cp & 0x3FF));
 }
 
 /**
+ * WML 1.3:
+ *  - 6.2 Character Entities
+ *  - 7.1 Entities
+ *
  * Resolve character references in WML text: the HTML 4 named entities and
- * numeric references (WML 1.3 §6.2).  An unknown or malformed one is left
+ * numeric references (WML 1.3: 6.2).  An unknown or malformed one is left
  * as written.
  */
 export function decodeEntities(text: string): string {
@@ -109,6 +115,6 @@ export function decodeEntities(text: string): string {
             if (!Object.prototype.hasOwnProperty.call(HTML4_ENTITIES, ref)) { return m; }
             cp = HTML4_ENTITIES[ref];
         }
-        return cp > 0 && cp <= 0x10FFFF ? fromCodePoint(cp) : m;
+        return cp > 0 && cp <= U_CP_MAX ? fromCodePoint(cp) : m;
     });
 }

@@ -18,24 +18,51 @@
  */
 
 import { decodeWbxml } from '../wbxml/decoder';
+import { WBXML_VERSION, MB_UINT_MORE, MB_UINT_BITS } from '../wbxml/tokenTable';
 import { compileWmls } from '../wmlsc/compiler';
-import { decodeWmlsc } from '../wmlsc/decoder';
-import { WmlsVM } from '../wmlsc/vm';
+import { decodeWmlsc, WmlscModule } from '../wmlsc/decoder';
+import { PragmaType, WmlsType } from '../wmlsc/opcodes';
+import { WmlsVM, VMResult } from '../wmlsc/vm';
 import {
     LibraryContext,
-    mkString, mkInt, mkFloat, mkBool, mkInvalid,
+    mkString, mkBool, mkInvalid, strNum,
     WmlsValue, DialogRequest,
 } from '../wmlsc/stdlib';
 import { WmlCard, escapeHtml, renderCards, ImageResolver } from '../wmlTransform';
 import {
-    charsetByMib, charsetByName, charsetByteMap, charsetFromContentType, decodeDeck, percentEncode,
+    charsetByMib, charsetByName, charsetByteMap, charsetFromContentType, charsetMib, decodeDeck,
+    percentEncode, sentCharset,
 } from './charset';
 import { wbmpToDataUri } from './wbmpUtils';
-import { checkDeckAccess } from './deckAccess';
+import { AccessVerdict, accessAllows, checkDeckAccess } from './deckAccess';
+import { sanitizeMarkup } from './sanitize';
 import { CookieJar } from './cookieJar';
 import { FetchResult } from './wapProtocol';
 import { HttpTransport, fetchHttp } from './httpClient';
 import { DatagramFactory, fetchWspGet, fetchWspPost } from './wspClient';
+
+/** Nested external calls (a unit calling a unit calling ...) */
+const MAX_EXTERNAL_DEPTH = 8;
+
+/**
+ * WMLScript:
+ *  - 6.7.2 Access Control
+ *  - 8.5 Access Control
+ *
+ * A unit's `use access` pragma against the calling deck or unit
+ * (WMLScript: 6.7.2, 8.5): without one, any caller may call it; with one, the domain
+ * defaults to the unit's host and the path to "/".
+ */
+export function checkUnitAccess(mod: WmlscModule, referrerUrl: string, unitUrl: string): AccessVerdict {
+    const value = (type: PragmaType): string | undefined => {
+        const p = mod.pragmas.find((x) => x.type === type);
+        const c = p ? mod.constants[p.indices[0]] : undefined;
+        return p ? (c && typeof c.value === 'string' ? c.value : '') : undefined;
+    };
+    const domain = value(PragmaType.ACCESS_DOMAIN), path = value(PragmaType.ACCESS_PATH);
+    if ((domain === undefined && path === undefined) || !referrerUrl) { return { allowed: true }; }
+    return accessAllows(domain || undefined, path || undefined, referrerUrl, unitUrl);
+}
 
 // ── Settings ─────────────────────────────────────────────────────
 
@@ -59,11 +86,19 @@ export const DEFAULT_SETTINGS: BrowserSettings = {
 
 /**
  * A parsed WMLScript call argument. `quoted` marks a string-literal token
- * ('...'/"...") whose type must stay String per WMLScript §8.3.4; a bare string
+ * ('...'/"...") whose type must stay String per WMLScript: 8.3.4; a bare string
  * (legacy / unquoted) is coerced by its literal form. Produced by
  * parseWmlScriptArgs in src/shared/wml-engine.js and forwarded by the UI.
  */
 export type WmlsCallArg = string | { value: string; quoted: boolean };
+
+/** What a script asked of the browser when it ended */
+export interface ScriptNav {
+    goUrl?: string;
+    doPrev: boolean;
+    doRefresh: boolean;
+    newContext?: boolean;
+}
 
 export interface HistoryEntry {
     url: string;
@@ -112,8 +147,10 @@ export class WapBrowserCore {
     public history: HistoryEntry[] = [];
     public wmlVars: Record<string, string> = {};
     public currentUrl = '';
+    /** The card on screen when a script was called (its id) */
+    private currentCardId = '';
     public currentWml = '';
-    /** Charset the current deck came in: the default for text sent back (§9.5.1). */
+    /** Charset the current deck came in: the default for text sent back (WML 1.3: 9.5.1). */
     public deckCharset = 'utf-8';
 
     // Outstanding interactive Dialogs.* calls (requestId → resolver), fulfilled
@@ -134,6 +171,10 @@ export class WapBrowserCore {
 
     // ── Navigation ───────────────────────────────────────────────
 
+    // WML 1.3:
+    //  - 12.5.1 The Go Task
+    //  - 9.5.1 The Go Element
+    //  - 12.5.5 Task Execution Failure
     public async navigate(
         targetUrl: string,
         postfields?: { name: string; value: string }[],
@@ -141,9 +182,12 @@ export class WapBrowserCore {
         referer?: string,
         fromDeck?: string,
         acceptCharset?: string,
+        noCache?: boolean,
     ): Promise<void> {
         // The deck we are navigating away from — used for deck access control.
         const referringDeck = fromDeck || '';
+        // A task that fails leaves the deck it started from current (WML 1.3: 12.5.5)
+        const before = this.currentUrl;
         try {
             const { transport } = this.settings;
 
@@ -151,25 +195,32 @@ export class WapBrowserCore {
             let postBody: string | undefined;
             const httpMethod = method.toUpperCase();
 
+            // WML 1.3: 9.5.1 The Go Element: in the first known charset of accept-charset, else the
+            // one the deck came in; a POST's Content-Type names it
+            const cs = sentCharset(goCharset(acceptCharset, this.deckCharset));
             if (postfields && postfields.length > 0) {
-                // §9.5.1: in the first known charset of accept-charset, else
-                // the one the deck came in
-                const cs = goCharset(acceptCharset, this.deckCharset);
                 const encoded = postfields.map((pf) =>
                     escapeFormField(String(pf.name), cs) + '=' + escapeFormField(String(pf.value), cs)
                 ).join('&');
 
                 if (httpMethod === 'GET') {
-                    // GET: append postfields as query parameters
-                    const sep = targetUrl.includes('?') ? '&' : '?';
-                    targetUrl = targetUrl + sep + encoded;
+                    // GET: the fields join the query, before the fragment
+                    const h = targetUrl.indexOf('#');
+                    const base = h < 0 ? targetUrl : targetUrl.substring(0, h);
+                    targetUrl = base + (base.includes('?') ? '&' : '?') + encoded +
+                        (h < 0 ? '' : targetUrl.substring(h));
                 } else {
                     postBody = encoded;
                 }
             }
+            if (httpMethod === 'POST' && postBody === undefined) {
+                postBody = '';                  // method="post" posts, fields or none
+            }
+            const extra = { referer, noCache: !!noCache, charset: cs };
 
+            const requested = targetUrl;
             if (transport === 'wsp') {
-                result = await this.fetchOverWsp(targetUrl, httpMethod, postBody);
+                result = await this.fetchOverWsp(targetUrl, httpMethod, postBody, extra);
 
                 // WSP has no transport-level redirect handling — follow them here.
                 let redirects = 0;
@@ -187,6 +238,8 @@ export class WapBrowserCore {
                     cookies: this.cookieJar.get(targetUrl),
                     cookieJar: this.cookieJar,
                     referer,
+                    contentCharset: cs,
+                    noCache: !!noCache,
                     userAgent: this.ports.userAgent,
                 });
             }
@@ -222,6 +275,7 @@ export class WapBrowserCore {
                 const renderable = (errorCt.includes('wml') || errorCt.includes('wbxml'))
                     && result.body.length > 0;
                 if (!renderable) {
+                    this.currentUrl = before;
                     this.ports.post({
                         type: 'error',
                         message: `HTTP ${result.status} — ${result.finalUrl}`,
@@ -231,37 +285,65 @@ export class WapBrowserCore {
                 this.ports.post({ type: 'status', message: `HTTP ${result.status}` });
             }
 
-            this.dispatchContent(result, referringDeck);
+            /*
+             * A redirect (or the .wmlc fallback) fetched the deck from
+             * another URL, by GET: that URL is the deck's, its base for
+             * relative links (WML 1.3: 5.3) and the one a Back fetches, with no post
+             * data (WML 1.3: 9.2; RFC 9110: 15.4).  The UI only knows the URL it asked
+             * for, so it is told.
+             */
+            const movedTo = result.finalUrl !== requested ? result.finalUrl : undefined;
+            this.dispatchContent(result, referringDeck, movedTo);
         } catch (err: unknown) {
+            this.currentUrl = before;
             this.ports.post({ type: 'error', message: errorText(err) });
         }
     }
 
-    /** Route a fetched resource to the right renderer by content type. */
-    private async dispatchContent(result: FetchResult, referringDeck: string): Promise<void> {
+    /** WML 1.3:
+     *  - 13.1.2 WML Media Type
+     *  - 5.3 Relative URLs
+     * WMLScript: 14 CONTENT TYPES
+     *
+     * Route a fetched resource to the right renderer by content type. */
+    private async dispatchContent(result: FetchResult, referringDeck: string, movedTo?: string): Promise<void> {
         const ct = result.contentType.toLowerCase();
 
-        // The charset named by the Content-Type (WML 1.3 §6.1, WBXML §5.2)
+        // The charset named by the Content-Type (WML 1.3: 6.1, WBXML 1.3: 5.2)
         const headerCs = charsetFromContentType(result.contentType);
-        if (ct.includes('application/vnd.wap.wmlc') || ct.includes('application/vnd.wap.wbxml')) {
+        if (ct.includes('vnd.wap.wmlscript')) {
+            // WMLScript: 14 CONTENT TYPES: a unit is known by its content type, whatever
+            // its URL (`msg.php#show()`); checked before text/vnd.wap.wml, a
+            // prefix of its type.  The UI undoes the deck load and calls the
+            // function the fragment names; with none it is a download.
+            if (result.finalUrl.includes('#')) {
+                this.currentUrl = referringDeck || this.currentUrl;
+                this.ports.post({ type: 'scriptContent', url: result.finalUrl });
+            } else {
+                await this.ports.download(result.body, result.contentType, result.finalUrl);
+            }
+        } else if (ct.includes('application/vnd.wap.wmlc') || ct.includes('application/vnd.wap.wbxml')) {
             // WBXML binary → decode to WML text
             const wmlText = decodeWbxml(result.body, headerCs);
             if (!this.enforceAccess(wmlText, referringDeck, result.finalUrl)) { return; }
-            this.renderWml(wmlText, result.finalUrl, wbxmlCharset(result.body) || headerCs);
+            this.renderWml(wmlText, result.finalUrl, wbxmlCharset(result.body) || headerCs, movedTo);
         } else if (ct.includes('text/vnd.wap.wml') || ct.includes('text/xml') ||
                    result.finalUrl.endsWith('.wml')) {
             const deck = decodeDeck(result.body, headerCs);
             if (!this.enforceAccess(deck.text, referringDeck, result.finalUrl)) { return; }
-            this.renderWml(deck.text, result.finalUrl, deck.charset);
+            this.renderWml(deck.text, result.finalUrl, deck.charset, movedTo);
         } else if (ct.includes('text/html')) {
-            // Plain HTML — show as-is
+            // Plain HTML: its text, layout, links and images, never its
+            // scripts (bugs.md #126)
+            const page = sanitizeMarkup(decodeDeck(result.body, headerCs).text, result.finalUrl);
             this.ports.post({
                 type: 'deckContent',
                 cardsHtml: `<div class="wml-card" id="html" data-title="HTML" style="display:block">` +
-                    `<div style="font-size:12px">${decodeDeck(result.body, headerCs).text}</div></div>`,
+                    `<div style="font-size:12px">${page}</div></div>`,
                 firstCardTitle: 'HTML Page',
                 fragment: '',
                 vars: this.wmlVars,
+                movedTo,
             });
         } else if (ct.includes('image/vnd.wap.wbmp') || result.finalUrl.endsWith('.wbmp')) {
             const dataUri = wbmpToDataUri(result.body);
@@ -273,25 +355,69 @@ export class WapBrowserCore {
                     firstCardTitle: 'WBMP Image',
                     fragment: '',
                     vars: this.wmlVars,
+                    movedTo,
                 });
             } else {
                 this.ports.post({ type: 'error', message: 'Invalid WBMP image' });
             }
         } else {
-            // Unsupported content type — offer as a download
-            await this.ports.download(result.body, result.contentType, result.finalUrl);
+            // A deck under a type that does not say so — text/plain, as we
+            // Accept, octet-stream or none, from servers that don't know .wml
+            // — is still shown; anything else is offered as a download.
+            const sniffed = sniffDeck(ct, result.body);
+            // A version byte is weak evidence, so the binary must decode to a
+            // deck as well; anything else stays a download.
+            let wmlText = '';
+            if (sniffed === 'wbxml') {
+                try { wmlText = decodeWbxml(result.body, headerCs); } catch { wmlText = ''; }
+            }
+            if (/<wml[\s>]/.test(wmlText)) {
+                if (!this.enforceAccess(wmlText, referringDeck, result.finalUrl)) { return; }
+                this.renderWml(wmlText, result.finalUrl, wbxmlCharset(result.body) || headerCs, movedTo);
+            } else if (sniffed === 'text') {
+                const deck = decodeDeck(result.body, headerCs);
+                if (!this.enforceAccess(deck.text, referringDeck, result.finalUrl)) { return; }
+                this.renderWml(deck.text, result.finalUrl, deck.charset, movedTo);
+            } else if (isPlainText(ct, result.body)) {
+                // Plain text (a .txt, source code, a log): its lines as
+                // written, wrapped, under its file name (wap-browser-c's
+                // text pages)
+                const name = fileName(result.finalUrl) || 'Text';
+                const text = plainText(decodeDeck(result.body, headerCs).text);
+                this.ports.post({
+                    type: 'deckContent',
+                    cardsHtml: `<div class="wml-card" id="text" data-title="${escapeHtml(name)}" style="display:block">` +
+                        `<pre class="wml-text-page" style="white-space:pre-wrap;word-wrap:break-word;tab-size:4;margin:0">` +
+                        `${escapeHtml(text)}</pre></div>`,
+                    firstCardTitle: name,
+                    fragment: '',
+                    vars: this.wmlVars,
+                    movedTo,
+                });
+            } else {
+                await this.ports.download(result.body, result.contentType, result.finalUrl);
+            }
         }
     }
 
-    /** GET or POST over WSP, picking the connectionless or connection-oriented port. */
-    private fetchOverWsp(targetUrl: string, method: string, postBody?: string): Promise<FetchResult> {
+    /** WSP:
+     *  - 7.1.2.3 Method Invocation Facility
+     *  - 7.2 Connectionless WSP
+     *
+     * GET or POST over WSP, picking the connectionless or connection-oriented port. */
+    private fetchOverWsp(targetUrl: string, method: string, postBody?: string,
+                         extra?: { referer?: string; noCache?: boolean; charset?: string }): Promise<FetchResult> {
         const { gatewayHost, gatewayPort, wspCoPort } = this.settings;
         const hdrs = {
             userAgent: this.ports.userAgent,
             cookie: this.cookieJar.get(targetUrl) || undefined,
+            referer: extra && extra.referer || undefined,
+            noCache: !!(extra && extra.noCache),
+            contentCharsetMib: charsetMib(extra && extra.charset || 'utf-8'),
         };
-        return method === 'POST' && postBody
-            ? fetchWspPost(this.ports.datagram, targetUrl, gatewayHost, wspCoPort, postBody, hdrs)
+        // method="post" posts, a body or none (WML 1.3: 9.5.1)
+        return method === 'POST'
+            ? fetchWspPost(this.ports.datagram, targetUrl, gatewayHost, wspCoPort, postBody || '', hdrs)
             : fetchWspGet(this.ports.datagram, targetUrl, gatewayHost, gatewayPort, hdrs);
     }
 
@@ -308,9 +434,13 @@ export class WapBrowserCore {
     }
 
     /**
+     * WML 1.3:
+     *  - 11.3.1 The Access Element
+     *  - 12.5.5 Task Execution Failure
+     *
      * Apply deck access control before rendering a fetched deck. On denial the
      * navigation fails: the user is notified and the invoking deck stays current
-     * (WAP-191 §12.5.5). Returns true when rendering may proceed.
+     * (WML 1.3: 12.5.5). Returns true when rendering may proceed.
      */
     private enforceAccess(wml: string, referrerUrl: string, destUrl: string): boolean {
         const verdict = checkDeckAccess(wml, referrerUrl, destUrl);
@@ -322,7 +452,8 @@ export class WapBrowserCore {
         return true;
     }
 
-    public renderWml(wmlContent: string, baseUrl: string, charset?: string): void {
+    // WML 1.3: 6.1 Reference Processing Model
+    public renderWml(wmlContent: string, baseUrl: string, charset?: string, movedTo?: string): void {
         this.currentWml = wmlContent;
         this.deckCharset = charset || 'utf-8';
         let fragment = '';
@@ -349,9 +480,10 @@ export class WapBrowserCore {
             firstCardTitle: firstTitle,
             fragment,
             vars: this.wmlVars,
-            // $(v:escape) in the deck's charset (§9.5.1): code point → byte
+            // $(v:escape) in the deck's charset (WML 1.3: 9.5.1): code point → byte
             // for a single-byte one, null for UTF-8
             charsetMap: charsetByteMap(this.deckCharset),
+            movedTo,
         });
 
         if (this.ports.debug?.isDebugging()) {
@@ -359,7 +491,9 @@ export class WapBrowserCore {
         }
     }
 
-    /** Fetch an image, converting WBMP to a data URI, and return it to the UI. */
+    /** WML 1.3: 11.9 Images
+     *
+     * Fetch an image, converting WBMP to a data URI, and return it to the UI. */
     public async proxyImage(src: string, id: string): Promise<void> {
         try {
             // Resolve root-relative or relative paths against currentUrl
@@ -394,17 +528,25 @@ export class WapBrowserCore {
 
     // ── WMLScript execution ──────────────────────────────────────
 
+    // WMLScript:
+    //  - 8.3 WMLScript and URLs
+    //  - 8.3.2 Fragment Anchors
+    //  - 8.3.4 URL Calls and Parameter Passing
     public async execWmlScript(
         scriptUrl: string, funcName: string, args: WmlsCallArg[],
-        clientVars: Record<string, string>,
+        clientVars: Record<string, string>, card?: string,
     ): Promise<void> {
-        // Merge client vars from the deck.
-        this.wmlVars = { ...this.wmlVars, ...clientVars };
+        this.currentCardId = card || '';
+        // The UI's variables are the browser context (WML 1.3: 10): a
+        // variable it no longer has (newcontext) must not come back.
+        this.wmlVars = { ...clientVars };
 
         // Debug path: run under debugger control (source breakpoints / stepping).
         if (this.ports.debug?.isDebugging()) {
             try {
                 const { ctx, nav } = this.buildVmContext();
+                ctx.baseUrl = scriptUrl.split('#')[0];
+                ctx.refererUrl = this.currentUrl;
                 const result = await this.ports.debug.runScript(
                     scriptUrl, funcName, convertArgs(args), ctx,
                 );
@@ -427,18 +569,12 @@ export class WapBrowserCore {
 
         // Normal path: fetch, compile/decode, run on the VM to completion.
         try {
-            const fetched = await this.fetchScript(scriptUrl);
-            const mod = fetched.isCompiled
-                ? decodeWmlsc(fetched.body)
-                : decodeWmlsc(compileWmls(decodeDeck(fetched.body, fetched.charset).text));
             const { ctx, nav } = this.buildVmContext();
             // Non-debug runs present real Dialogs.* modals; the VM suspends on
             // each dialog and resumes with the user's response (requestDialog).
             ctx.interactiveDialogs = true;
-            const vm = new WmlsVM(mod, { context: ctx, maxSteps: 10000000 });
-            const result = await vm.callFunctionAsync(
-                funcName, convertArgs(args), (req) => this.requestDialog(req),
-            );
+            const result = await this.runUnit(scriptUrl, funcName, convertArgs(args), ctx,
+                                              this.currentUrl, 0);
             this.applyScriptResult(ctx, nav(), result.error);
         } catch (err: unknown) {
             this.ports.post({
@@ -447,8 +583,58 @@ export class WapBrowserCore {
         }
     }
 
-    /** Fetch a script body for a normal run, with .wmls → .wmlsc 404 fallback. */
-    public async fetchScript(scriptUrl: string): Promise<{ body: Buffer; isCompiled: boolean; charset: string }> {
+    /**
+     * WMLScript:
+     *  - 6.4.2.2 External Functions
+     *  - 12.3.1 Bytecode Errors
+     *
+     * Load the unit at `unitUrl` (fragment ignored), check its access pragma
+     * against `referrer` (the deck of a URL call, or the calling unit), and
+     * run `funcName` with `args`.  The unit's external calls run the same
+     * way, on a context sharing the browser's variables and navigation, and
+     * a failed one is fatal (WMLScript: 12.3.1).
+     */
+    private async runUnit(unitUrl: string, funcName: string, args: WmlsValue[],
+                          ctx: LibraryContext, referrer: string, depth: number): Promise<VMResult> {
+        const url = unitUrl.split('#')[0];
+        ctx.baseUrl = url;                  // URL.getBase, getCurrentCard (WMLScript Libraries: 10.9)
+        ctx.refererUrl = referrer;          // URL.getReferer (WMLScript Libraries: 10.10)
+        const fetched = await this.fetchScript(url);
+        if (fetched.status >= 400) {
+            throw new Error(`WMLScript unit not loaded: ${url} (${fetched.status})`);
+        }
+        const mod = fetched.isCompiled
+            ? decodeWmlsc(fetched.body)
+            : decodeWmlsc(compileWmls(decodeDeck(fetched.body, fetched.charset).text));
+        const access = checkUnitAccess(mod, referrer, url);
+        if (!access.allowed) { throw new Error(access.reason); }
+        const vm = new WmlsVM(mod, { context: ctx, maxSteps: 10000000 });
+        return vm.callFunctionAsync(
+            funcName, args, (req) => this.requestDialog(req),
+            async (extUrl, extFunc, extArgs) => {
+                if (depth + 1 >= MAX_EXTERNAL_DEPTH) {
+                    throw new Error(`External calls nested deeper than ${MAX_EXTERNAL_DEPTH}`);
+                }
+                let target: string;
+                try { target = new URL(extUrl, url).toString(); } catch { target = extUrl; }
+                // The callee's own run state (Lang.exit/abort); the browser's
+                // variables and navigation are shared
+                const sub: LibraryContext = { ...ctx, exitResult: undefined, aborted: undefined };
+                const r = await this.runUnit(target, extFunc, extArgs, sub, url, depth + 1);
+                if (r.error) { throw new Error(r.error); }
+                // Lang.exit in the callee ends the whole script (WMLScript Libraries: 7.11)
+                if (sub.exitResult !== undefined) { ctx.exitResult = sub.exitResult; }
+                return r.value;
+            },
+        );
+    }
+
+    /** WMLScript:
+     *  - 14 CONTENT TYPES
+     *  - 7.1.7 Character Set Resolution
+     *
+     * Fetch a script body for a normal run, with .wmls → .wmlsc 404 fallback. */
+    public async fetchScript(scriptUrl: string): Promise<{ body: Buffer; isCompiled: boolean; charset: string; status: number }> {
         let fetchUrl = scriptUrl;
         let result = await this.getResource(fetchUrl);
         if (result.status === 404 && fetchUrl.endsWith('.wmls')) {
@@ -457,8 +643,8 @@ export class WapBrowserCore {
         }
         const isCompiled = result.contentType.toLowerCase().includes('wmlscriptc') ||
                            fetchUrl.endsWith('.wmlsc');
-        // WMLScript source is read in its Content-Type charset (WAP-193 §7.1.7)
-        return { body: result.body, isCompiled, charset: charsetFromContentType(result.contentType) };
+        // WMLScript source is read in its Content-Type charset (WMLScript: 7.1.7)
+        return { body: result.body, isCompiled, charset: charsetFromContentType(result.contentType), status: result.status };
     }
 
     /**
@@ -486,25 +672,39 @@ export class WapBrowserCore {
         }
     }
 
-    /** Build the VM library context bound to the browser's WML variables + navigation. */
+    /**
+     * WMLScript Libraries:
+     *  - 10.9 getBase
+     *  - 10.10 getReferer
+     *  - 11.6 getCurrentCard
+     *
+     * Build the VM library context bound to the browser's WML variables +
+     * navigation.  The last go() or prev() stays in effect, go("") cancels
+     * both (WMLScript Libraries: 11.3-11.4); newContext() clears the variables and,
+     * when the script ends, the history, and makes a previous or later
+     * prev() do nothing (WMLScript Libraries: 11.5).
+     */
     public buildVmContext(): {
         ctx: LibraryContext;
-        nav: () => { goUrl?: string; doPrev: boolean; doRefresh: boolean };
+        nav: () => ScriptNav;
     } {
         let goUrl: string | undefined;
         let doPrev = false;
         let doRefresh = false;
+        let newContext = false;
+        const deck = this.currentUrl.split('#')[0];
         const ctx: LibraryContext = {
             wmlVariables: new Map(Object.entries(this.wmlVars)),
             wmlVars: { ...this.wmlVars },
-            currentCard: this.currentUrl,
+            currentCard: deck && (this.currentCardId ? deck + '#' + this.currentCardId : deck),
             onSetVar: (name, value) => { this.wmlVars[name] = value; },
-            onGo: (u) => { goUrl = u; },
-            onPrev: () => { doPrev = true; },
+            onGo: (u) => { goUrl = u; doPrev = false; },
+            onPrev: () => { if (!newContext) { doPrev = true; goUrl = undefined; } },
+            onNewContext: () => { newContext = true; doPrev = false; this.wmlVars = {}; },
             onRefresh: () => { doRefresh = true; },
             onOutput: () => { /* discarded for non-debug; the debug adapter overrides this */ },
         };
-        return { ctx, nav: () => ({ goUrl, doPrev, doRefresh }) };
+        return { ctx, nav: () => ({ goUrl, doPrev, doRefresh, newContext }) };
     }
 
     /**
@@ -537,20 +737,28 @@ export class WapBrowserCore {
         }
     }
 
-    /** Sync variables changed by the script back to wmlVars and notify the UI. */
+    /** WMLScript Libraries:
+     *  - 11.3 go
+     *  - 11.4 prev
+     *  - 11.5 newContext
+     *
+     * Sync variables changed by the script back to wmlVars and notify the UI. */
     public applyScriptResult(
         ctx: LibraryContext,
-        nav: { goUrl?: string; doPrev: boolean; doRefresh: boolean },
+        nav: ScriptNav,
         error?: string,
     ): void {
         for (const [key, val] of ctx.wmlVariables) { this.wmlVars[key] = val; }
         for (const key of Object.keys(ctx.wmlVars)) { this.wmlVars[key] = ctx.wmlVars[key]; }
+        // A fatal error (Lang.abort too) cancels the pending go() or prev()
+        // (WMLScript Libraries: 11.3, WMLScript: 12.3); what the script set stays
         this.ports.post({
             type: 'wmlscriptResult',
             vars: this.wmlVars,
-            goUrl: nav.goUrl,
-            doPrev: nav.doPrev,
-            doRefresh: nav.doRefresh,
+            newContext: nav.newContext || undefined,
+            goUrl: error ? undefined : nav.goUrl,
+            doPrev: !error && nav.doPrev,
+            doRefresh: !error && nav.doRefresh,
             error,
         });
     }
@@ -584,7 +792,7 @@ function isAbsoluteHttp(u: string): boolean {
 }
 
 /**
- * WML 1.3 §9.5.1 form submission: URI-escape (RFC2396, lowercase %xx,
+ * WML 1.3: 9.5.1 The Go Element: form submission: URI-escape (RFC2396, lowercase %xx,
  * unreserved set preserved) field names and values, each character encoded
  * in `charset` first (default UTF-8; a character it lacks goes as '?').
  * Before, characters up to U+00FF went as Latin-1 and the rest as UTF-8,
@@ -594,7 +802,9 @@ export function escapeFormField(s: string, charset: string = 'utf-8'): string {
     return percentEncode(s, charset);
 }
 
-/** The charset a <go accept-charset="..."> list asks for: its first known
+/** WML 1.3: 9.5.1 The Go Element
+ *
+ * The charset a <go accept-charset="..."> list asks for: its first known
  *  name (comma- or space-separated), else the deck's ("unknown" too). */
 export function goCharset(acceptCharset: string | undefined, deckCharset: string): string {
     const names = String(acceptCharset || '').split(/[\s,]+/);
@@ -605,12 +815,81 @@ export function goCharset(acceptCharset: string | undefined, deckCharset: string
     return deckCharset || 'utf-8';
 }
 
-/** The charset field of a WBXML document, '' when 0 / unknown (§5.6). */
+/**
+ * WML 1.3: 13.1.2 WML Media Type
+ * WBXML 1.3: 5.4 Version Number
+ *
+ * Is a reply of a non-WAP content type a deck? wap-browser-c's reply_is_deck:
+ * never for media, else WBXML (a version byte 0-3) or text whose first element,
+ * after a BOM and the prolog (<?xml?>, <!DOCTYPE>, comments), is <wml>.
+ * dispatchContent asks only after the WBMP check, whose 0x00 type byte this
+ * WBXML test would pass.
+ */
+export function sniffDeck(contentType: string, body: Buffer): 'wbxml' | 'text' | null {
+    if (/^(image|audio|video)\//.test(contentType)) { return null; }
+    const n = body.length;
+    if (n >= 4 && body[0] <= WBXML_VERSION) { return 'wbxml'; }   // 1.0-1.3
+    let i = (n >= 3 && body[0] === 0xEF && body[1] === 0xBB && body[2] === 0xBF) ? 3 : 0;
+    while (i < n && i < 1024) {
+        const c = body[i];
+        if (c === 0x20 || (c >= 0x09 && c <= 0x0D)) { i++; continue; }
+        if (c !== 0x3C || i + 1 >= n) { return null; }               // '<'
+        if (body[i + 1] !== 0x3F && body[i + 1] !== 0x21) {          // not '?' or '!'
+            return n - i >= 4 && body.toString('latin1', i + 1, i + 4) === 'wml' ? 'text' : null;
+        }
+        while (i < n && body[i] !== 0x3E) { i++; }                    // past '>'
+        i++;
+    }
+    return null;
+}
+
+/**
+ * Is a reply that is not a deck plain text?  As wap-browser-c's
+ * reply_is_text: its type is none, a text one (text/plain, a source file's
+ * text/x-csrc), octet-stream (a log or a file with no extension from a
+ * server that does not know the name), JSON or JavaScript, never HTML, and
+ * its first 512 bytes hold no NUL or other control byte but white space
+ * and ESC (a log's colours).  Any other type (a PDF, a font, an archive)
+ * is a download, however its first bytes look.
+ */
+export function isPlainText(contentType: string, body: Buffer): boolean {
+    if (/html/.test(contentType) ||
+        (contentType && !/text\/|octet-stream|json|javascript/.test(contentType))) { return false; }
+    for (let i = 0; i < body.length && i < 512; i++) {
+        const c = body[i];
+        if (c < 0x20 && (c < 0x09 || c > 0x0D) && c !== 0x1B) { return false; }
+    }
+    return true;
+}
+
+/**
+ * ECMA-48: 5.4 Control sequences
+ *
+ * A text page's text as wap-browser-c shows it: a terminal control
+ * sequence (ESC [ ... final byte, a log's colours) dropped, any other
+ * control character but a tab or line end a space.
+ */
+export function plainText(text: string): string {
+    return text.replace(/\x1b\[[\x20-\x3f]*[\x40-\x7e]?/g, '')
+        .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, ' ');
+}
+
+/** The last path segment of a URL (no query or fragment), '' if none. */
+function fileName(u: string): string {
+    try {
+        const p = new URL(u).pathname;
+        return decodeURIComponent(p.slice(p.lastIndexOf('/') + 1));
+    } catch { return ''; }
+}
+
+/** WBXML 1.3: 5.6 Charset
+ *
+ * The charset field of a WBXML document, '' when 0 / unknown (WBXML 1.3: 5.6). */
 function wbxmlCharset(b: Buffer): string {
     let p = 1;
     const mb = () => {
         let v = 0, c = 0;
-        do { c = p < b.length ? b[p++] : 0; v = v * 128 + (c & 0x7F); } while (c & 0x80);
+        do { c = p < b.length ? b[p++] : 0; v = v * 128 + (c & MB_UINT_BITS); } while (c & MB_UINT_MORE);
         return v;
     };
     if (mb() === 0) { mb(); }            // public id 0: a string table index
@@ -626,7 +905,9 @@ export function getFallbackUrl(targetUrl: string): string | undefined {
 }
 
 /**
- * Convert parsed WMLScript call args to typed WmlsValues. Per WMLScript §8.3.4
+ * WMLScript: 8.3.4 URL Calls and Parameter Passing
+ *
+ * Convert parsed WMLScript call args to typed WmlsValues. Per WMLScript: 8.3.4
  * a quoted token ('...'/"...") is passed as a String; only unquoted tokens are
  * coerced to boolean / number / invalid by their literal form. Accepts both the
  * structured { value, quoted } tokens emitted by parseWmlScriptArgs and bare
@@ -640,11 +921,11 @@ export function convertArgs(args: WmlsCallArg[]): WmlsValue[] {
         if (s === 'true') { return mkBool(true); }
         if (s === 'false') { return mkBool(false); }
         if (s === 'invalid') { return mkInvalid(); }
-        const n = Number(s);
-        if (!isNaN(n) && s.length > 0) {
-            return Number.isInteger(n) ? mkInt(n) : mkFloat(n);
-        }
-        return mkString(s);
+        // A number by the literal grammar (WMLScript: 8.3.3, decimal only), an
+        // integer past 32 bits a float; anything else stays a string
+        // (lenient: the spec fails the call)
+        const n = strNum(s);
+        return n.type === WmlsType.Invalid ? mkString(s) : n;
     });
 }
 
@@ -657,5 +938,6 @@ export function renderCardsHtml(
         try { return escapeHtml(new URL(src, baseUrl).toString()); } catch { return escapeHtml(src); }
     };
     const { parts, cards, firstTitle } = renderCards(wmlContent, resolveImage);
-    return { html: parts.join('\n'), cards, firstTitle };
+    // A deck's own markup passes through the transform (bugs.md #126)
+    return { html: sanitizeMarkup(parts.join('\n')), cards, firstTitle };
 }

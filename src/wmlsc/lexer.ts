@@ -10,6 +10,7 @@
  *  Based on WAP-193-WMLScript specification
  */
 
+// WMLScript: 7.2 WMLScript Lexical Grammar
 export enum TokenType {
     // Literals
     IntegerLiteral,
@@ -114,6 +115,7 @@ export interface Token {
     offset: number;
 }
 
+// WMLScript: 6.1.7 Reserved Words
 const KEYWORDS: Record<string, TokenType> = {
     'break':     TokenType.Break,
     'continue':  TokenType.Continue,
@@ -203,6 +205,9 @@ export class Lexer {
         return ch;
     }
 
+    // WMLScript:
+    //  - 6.1.2 Whitespace and Line Breaks
+    //  - 6.1.4 Comments
     private skipWhitespaceAndComments(): void {
         while (this.pos < this.source.length) {
             const ch = this.source[this.pos];
@@ -265,6 +270,9 @@ export class Lexer {
         return this.isIdentStart(ch) || this.isDigit(ch);
     }
 
+    // WMLScript:
+    //  - 6.1.5.1 Integer Literals
+    //  - 6.1.5.2 Floating-Point Literals
     private readNumber(): void {
         const startLine = this.line;
         const startCol = this.column;
@@ -328,6 +336,9 @@ export class Lexer {
         this.emit(isFloat ? TokenType.FloatLiteral : TokenType.IntegerLiteral, value, startLine, startCol, startOffset);
     }
 
+    // WMLScript:
+    //  - 6.1.6 Identifiers
+    //  - 6.1.7 Reserved Words
     private readIdentifier(): void {
         const startLine = this.line;
         const startCol = this.column;
@@ -354,6 +365,7 @@ export class Lexer {
         }
     }
 
+    // WMLScript: 6.1.5.3 String Literals
     private readString(quote: string): void {
         const startLine = this.line;
         const startCol = this.column;
@@ -400,7 +412,7 @@ export class Lexer {
                         break;
                     }
                     case 'u': {
-                        // Unicode escape \uNNNN: any Unicode character (WAP-193 §7:
+                        // Unicode escape \uNNNN: any Unicode character (WMLScript: 7:
                         // "any Unicode character may also be expressed as a
                         // Unicode escape sequence")
                         let hex = '';

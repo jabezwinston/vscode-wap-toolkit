@@ -84,14 +84,19 @@ async function awaitReply<T>(
 }
 
 /**
- * One WTP class-2 transaction as the initiator (WAP-224 §9.5), returning the
+ * WTP:
+ *  - 9.5 WTP Initiator
+ *  - 7.2 Re-transmission until Acknowledgement
+ *  - 7.9.3 Procedure
+ *
+ * One WTP class-2 transaction as the initiator (WTP: 9.5), returning the
  * Result's WSP PDU once `accept` takes it.
  *
- * Silence re-sends the Invoke with RID set (§8.2.6). A TID verification
+ * Silence re-sends the Invoke with RID set (WTP: 8.2.6). A TID verification
  * (Ack with Tve) is answered with Ack(TIDok), which then takes the Invoke's
- * place on re-sends (§7.9.3); after a hold-on Ack (no Tve) the Result is only
+ * place on re-sends (WTP: 7.9.3); after a hold-on Ack (no Tve) the Result is only
  * awaited. Replies are matched on the TID's low 15 bits: the responder sets
- * bit 15 (§7.8.1), and gateways that echo the TID as sent are matched too.
+ * bit 15 (WTP: 7.8.1), and gateways that echo the TID as sent are matched too.
  */
 async function wtpTransaction(
     session: DatagramSession,
@@ -131,6 +136,10 @@ async function wtpTransaction(
 }
 
 /**
+ * WSP:
+ *  - 7.1.2.3 Method Invocation Facility
+ *  - 7.2 Connectionless WSP
+ *
  * Connectionless WSP GET (default gateway port 9200).
  *
  * The transaction id is one byte and there is no WTP framing on this port.
@@ -173,6 +182,8 @@ export async function fetchWspGet(
 }
 
 /**
+ * WSP: 7.1.2.3 Method Invocation Facility
+ *
  * Connection-oriented WSP POST over WTP (default gateway CO port 9201).
  *
  * Two transactions on one socket: Connect must complete and be acknowledged

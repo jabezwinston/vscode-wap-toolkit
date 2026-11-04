@@ -56,7 +56,6 @@ export class WapBrowserPanel {
     private static readonly viewType = 'wapBrowser';
 
     private readonly panel: vscode.WebviewPanel;
-    private readonly extensionUri: vscode.Uri;
     private readonly context: vscode.ExtensionContext;
     private disposables: vscode.Disposable[] = [];
     /** All browsing logic; this class is its VS Code host. */
@@ -81,7 +80,6 @@ export class WapBrowserPanel {
 
     private constructor(panel: vscode.WebviewPanel, context: vscode.ExtensionContext) {
         this.panel = panel;
-        this.extensionUri = context.extensionUri;
         this.context = context;
 
         const ports: BrowserPorts = {
@@ -148,11 +146,11 @@ export class WapBrowserPanel {
         switch (msg.type) {
             case 'navigate':
                 await this.core.navigate(msg.url, msg.postfields, msg.method, msg.referer, msg.fromDeck,
-                                         msg.acceptCharset);
+                                         msg.acceptCharset, msg.noCache);
                 break;
 
             case 'execWmlScript':
-                await this.core.execWmlScript(msg.scriptUrl, msg.funcName, msg.args, msg.wmlVars);
+                await this.core.execWmlScript(msg.scriptUrl, msg.funcName, msg.args, msg.wmlVars, msg.card);
                 break;
 
             case 'debug':
@@ -295,8 +293,8 @@ export class WapBrowserPanel {
         const source = await this.core.fetchSource(absScriptUrl);
         if (source != null) {
             try {
-                const { bytecode, lineMaps, varNames } = compileWmlsWithDebugInfo(source);
-                browserDebugSession.registerScript(sourceUri, { module: decodeWmlsc(bytecode), lineMaps, varNames });
+                const { bytecode, ...debugInfo } = compileWmlsWithDebugInfo(source);
+                browserDebugSession.registerScript(sourceUri, { module: decodeWmlsc(bytecode), ...debugInfo });
                 await this.openVirtualDoc(sourceUri, source, takeFocus);
                 return sourceUri;
             } catch { /* unparseable source — try the compiled form instead */ }
@@ -308,7 +306,7 @@ export class WapBrowserPanel {
             try {
                 const module = decodeWmlsc(bytecode);
                 const { text, lineMaps } = disassembleWithLineMap(module);
-                browserDebugSession.registerScript(sourceUri, { module, lineMaps, varNames: [] });
+                browserDebugSession.registerScript(sourceUri, { module, lineMaps, varNames: [], funcNames: [] });
                 await this.openVirtualDoc(sourceUri, text, takeFocus, 'wmlsc-disasm');
                 return sourceUri;
             } catch { /* not valid bytecode */ }

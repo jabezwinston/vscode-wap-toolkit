@@ -11,11 +11,11 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import { decodeWbxml } from './decoder';
+import { viewerHtml } from '../shared/viewerChrome';
 
 export class WbxmlEditorProvider implements vscode.CustomReadonlyEditorProvider {
     public static readonly viewType = 'wml.wbxmlViewer';
 
-    constructor(private readonly context: vscode.ExtensionContext) {}
 
     openCustomDocument(uri: vscode.Uri): vscode.CustomDocument {
         return { uri, dispose: () => {} };
@@ -37,55 +37,19 @@ export class WbxmlEditorProvider implements vscode.CustomReadonlyEditorProvider 
         const fileName = uri.fsPath.split('/').pop() || 'file';
         const highlighted = this.highlightWml(wml);
 
-        return `<!DOCTYPE html>
-<html>
-<head>
-<style>
-  body {
-    margin: 0;
-    padding: 16px;
-    font-family: var(--vscode-editor-font-family, 'Consolas, Courier New, monospace');
-    font-size: var(--vscode-editor-font-size, 14px);
-    line-height: var(--vscode-editor-line-height, 1.5);
-    background: var(--vscode-editor-background);
-    color: var(--vscode-editor-foreground);
-  }
-  .header {
-    padding: 8px 12px;
-    margin-bottom: 12px;
-    border-bottom: 1px solid var(--vscode-panel-border, #444);
-    font-size: 12px;
-    color: var(--vscode-descriptionForeground, #999);
-  }
-  .header strong { color: var(--vscode-editor-foreground); }
-  .header .stat { color: var(--vscode-debugTokenExpression-number, #b5cea8); }
-  pre {
-    margin: 0;
-    white-space: pre;
-    tab-size: 2;
-    -moz-tab-size: 2;
-  }
-  .xml-decl { color: var(--vscode-editorLineNumber-foreground, #858585); }
-  .doctype { color: var(--vscode-editorLineNumber-foreground, #858585); }
+        return viewerHtml({
+            fileName,
+            facts: ['Decompiled from WBXML', `${binarySize} bytes \u2192 ${wml.length} chars WML`],
+            body: `<pre class="viewer-code">${highlighted}</pre>`,
+            css: `
+  .xml-decl, .doctype { color: var(--vscode-editorLineNumber-foreground, #858585); }
   .tag { color: var(--vscode-symbolIcon-keywordForeground, #569cd6); }
   .attr-name { color: var(--vscode-debugTokenExpression-string, #9cdcfe); }
   .attr-value { color: var(--vscode-debugTokenExpression-number, #ce9178); }
-  .text { color: var(--vscode-editor-foreground); }
   .entity { color: var(--vscode-debugTokenExpression-number, #b5cea8); }
   .variable { color: var(--vscode-symbolIcon-variableForeground, #dcdcaa); }
-  .comment { color: var(--vscode-editorLineNumber-foreground, #6a9955); }
-</style>
-</head>
-<body>
-  <div class="header">
-    <strong>${this.escapeHtml(fileName)}</strong> &mdash;
-    Decompiled from WBXML
-    (<span class="stat">${binarySize}</span> bytes binary &rarr;
-    <span class="stat">${wml.length}</span> chars WML)
-  </div>
-  <pre>${highlighted}</pre>
-</body>
-</html>`;
+  .comment { color: var(--vscode-editorLineNumber-foreground, #6a9955); }`,
+        });
     }
 
     private highlightWml(wml: string): string {
