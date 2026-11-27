@@ -2,7 +2,7 @@
   "name": "wap-toolkit",
   "displayName": "WAP Toolkit",
   "description": "Complete toolkit for WML & WMLScript authoring, preview and debugging",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "publisher": "jabezwinston",
   "license": "Apache-2.0",
   "repository": {

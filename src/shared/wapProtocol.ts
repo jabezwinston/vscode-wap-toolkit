@@ -260,12 +260,21 @@ export function wspLengthHeaders(r: { status: number; size: number; first: numbe
 
 // ── Content-type codes used when building request PDUs ─────────
 
+const WSP_CT_TEXT_PLAIN = 0x03;
 const WSP_CT_TEXT_WML = 0x08;
 const WSP_CT_TEXT_WMLS = 0x09;
 const WSP_CT_APP_URLENC = 0x12;
 const WSP_CT_APP_WMLC = 0x14;
 const WSP_CT_APP_WMLSC = 0x15;
 const WSP_CT_IMAGE_WBMP = 0x21;
+
+/** What a request accepts (WSP: 8.4.2.7): every type the browser reads, as
+ * over HTTP (WAP_ACCEPT in httpClient.ts; wap-browser-c bugs.md #256) */
+const WSP_ACCEPT = [
+    WSP_CT_APP_WMLC, WSP_CT_APP_WMLSC,
+    WSP_CT_TEXT_WML, WSP_CT_TEXT_WMLS,
+    WSP_CT_IMAGE_WBMP, WSP_CT_TEXT_PLAIN,
+];
 
 /** Well-known header field codes (WSP Table 39) used in requests. */
 const WSP_HDR_USER_AGENT = 0x29;
@@ -299,14 +308,15 @@ export interface FetchResult {
 /**
  * WSP: 8.2.3.3 Reply
  *
- * WSP status → HTTP status. Hi nibble = class, lo = detail.
- * Special case: 0x6* maps to 500+lo, not 600. Per WSP Table 36.
+ * WSP status → HTTP status, WSP Table 36 (Status Code Assignments): the
+ * high nibble is the class (1xx-3xx: 0x1*-0x3*), the low nibble the
+ * detail, except that the 4xx run on past 0x4F (416 = 0x50, 417 = 0x51)
+ * and the 5xx start at 0x60.
  */
 export function wspStatusToHttp(s: number): number {
-    const hi = (s >> 4) & 0x0F;
-    const lo = s & 0x0F;
-    if (hi >= 6) { return 500 + lo; }
-    return hi * 100 + lo;
+    if (s >= 0x60) { return 500 + s - 0x60; }
+    if (s >= 0x40) { return 400 + s - 0x40; }
+    return (s >> 4) * 100 + (s & 0x0F);
 }
 
 // ── Request header encoding ────────────────────────────────────
@@ -385,11 +395,7 @@ function commonRequestHeaders(out: number[], hdrs: WspRequestHeaders): void {
 export function buildWspGet(targetUrl: string, hdrs: WspRequestHeaders): Buffer {
     const urlBuf = Buffer.from(targetUrl, 'utf-8');
     const parts: number[] = [];
-    pushAcceptHeaders(parts, [
-        WSP_CT_APP_WMLC, WSP_CT_APP_WMLSC,
-        WSP_CT_TEXT_WML, WSP_CT_TEXT_WMLS,
-        WSP_CT_IMAGE_WBMP,
-    ]);
+    pushAcceptHeaders(parts, WSP_ACCEPT);
     commonRequestHeaders(parts, hdrs);
 
     return Buffer.concat([
@@ -416,7 +422,7 @@ export function buildWspPost(targetUrl: string, postBody: string, hdrs: WspReque
     const cs = mib < WSP_SHORT_INT ? [WSP_SHORT_INT | mib] : [2, (mib >> 8) & 0xFF, mib & 0xFF];
     parts.push(2 + cs.length, WSP_SHORT_INT | WSP_CT_APP_URLENC,
         WSP_SHORT_INT | WSP_PARAM_CHARSET, ...cs);
-    pushAcceptHeaders(parts, [WSP_CT_APP_WMLC, WSP_CT_TEXT_WML]);
+    pushAcceptHeaders(parts, WSP_ACCEPT);
     commonRequestHeaders(parts, hdrs);
 
     const hdrsBuf = Buffer.from(parts);

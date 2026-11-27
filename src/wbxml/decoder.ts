@@ -38,6 +38,28 @@ for (const [key, token] of Object.entries(WML_ATTR_VALUE_TOKENS)) {
     ATTR_VALUE_BY_TOKEN[token] = key;
 }
 
+// WBXML 1.3: 7.2.1 Public Indentifier table example
+//
+// The DOCTYPEs of the WML public identifiers
+const PUBLIC_DOCTYPES: Record<number, [string, string]> = {
+    0x02: ['-//WAPFORUM//DTD WML 1.0//EN', 'http://www.wapforum.org/DTD/wml.xml'],
+    0x04: ['-//WAPFORUM//DTD WML 1.1//EN', 'http://www.wapforum.org/DTD/wml_1.1.xml'],
+    0x09: ['-//WAPFORUM//DTD WML 1.2//EN', 'http://www.wapforum.org/DTD/wml12.dtd'],
+    0x0A: ['-//WAPFORUM//DTD WML 1.3//EN', 'http://www.wapforum.org/DTD/wml13.dtd'],
+};
+
+/** A literal dollar sign as WML writes it (WML 1.3: 10.3.3) */
+function dollars(s: string): string {
+    return s.replace(/\$/g, '$$$$');
+}
+
+/** A code point as a JS string (no String.fromCodePoint on a KitKat WebView) */
+function fromCodePoint(cp: number): string {
+    if (cp < 0x10000) { return String.fromCharCode(cp); }
+    cp -= 0x10000;
+    return String.fromCharCode(0xD800 + (cp >> 10), 0xDC00 + (cp & 0x3FF));
+}
+
 /**
  * Decode WBXML to WML text.  Strings are read in the document's charset
  * (WBXML 1.3: 5.6 charset field), else `externalCharset` (the Content-Type's, WBXML 1.3: 5.2),
@@ -79,9 +101,10 @@ class WbxmlDecoder {
         this.readByte(); // version
         const publicId = this.readMbUint32();
         let charset: number | undefined;
+        let publicIdIndex = -1;
         if (publicId === 0) {
             // publicid is in string table
-            this.readMbUint32(); // string table index
+            publicIdIndex = this.readMbUint32(); // string table index
         }
         charset = this.readMbUint32();
         this.charset = charsetByMib(charset) || this.externalCharset || 'utf-8';
@@ -92,10 +115,13 @@ class WbxmlDecoder {
         this.tableEnd = Math.min(this.pos + stLen, this.data.length);
         this.pos += stLen;
 
-        // Build XML output
+        // Build XML output: the DOCTYPE the public identifier names (WBXML 1.3:
+        // 5.5, 7.2.1), WML 1.3's when it is unknown or missing
+        const dtd = PUBLIC_DOCTYPES[publicId] ?? PUBLIC_DOCTYPES[0x0A];
+        const pubText = publicIdIndex >= 0 ? this.getStringTableEntry(publicIdIndex) : dtd[0];
         let xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
-        xml += '<!DOCTYPE wml PUBLIC "-//WAPFORUM//DTD WML 1.3//EN"\n';
-        xml += '  "http://www.wapforum.org/DTD/wml13.dtd">\n\n';
+        xml += `<!DOCTYPE wml PUBLIC "${pubText}"\n`;
+        xml += `  "${publicIdIndex >= 0 ? '' : dtd[1]}">\n\n`;
 
         // decodeTag no longer appends its own trailing newline, so the document
         // gets one here rather than every element carrying one.
@@ -126,17 +152,20 @@ class WbxmlDecoder {
                 this.indent--;
                 return '';
 
+            // A '$' in a string or entity token is a dollar sign: an encoder
+            // made every variable reference a token (WML 1.3: 14.2.1), so it is
+            // written "$$" (WML 1.3: 10.3.3)
             case STR_I:
-                return this.escapeXml(this.readTerminatedString());
+                return dollars(this.escapeXml(this.readTerminatedString()));
 
             case STR_T: {
                 const offset = this.readMbUint32();
-                return this.escapeXml(this.getStringTableEntry(offset));
+                return dollars(this.escapeXml(this.getStringTableEntry(offset)));
             }
 
             case ENTITY: {
                 const charCode = this.readMbUint32();
-                return this.entityToString(charCode);
+                return charCode === 0x24 ? '$$' : this.entityToString(charCode);
             }
 
             // WML 1.3 binary: EXT_x_0 = escaped, EXT_x_1 = unescaped,
@@ -167,13 +196,10 @@ class WbxmlDecoder {
                 return '';
 
             case PI: {
-                // Processing instruction: PI attrStart *attrValue END
-                // Must consume all PI data per spec section 5.8.4.4
-                while (this.pos < this.data.length) {
-                    const piByte = this.readByte();
-                    if (piByte === END) { break; }
-                }
-                return '';
+                // WBXML 1.3: 5.8.4.4 Processing Instruction: PI attrStart
+                // *attrValue END, the target and the data
+                const attr = this.decodeAttributeList(true)[0];
+                return attr ? `<?${attr[0]}${attr[1] ? ' ' + attr[1] : ''}?>` : '';
             }
 
             case OPAQUE: {
@@ -305,8 +331,20 @@ class WbxmlDecoder {
     //  - 14.3.4 Attribute Value Tokens
     private decodeAttributes(): string {
         let result = '';
+        for (const [name, value] of this.decodeAttributeList(false)) {
+            result += ` ${name}="${this.escapeXmlAttr(value)}"`;
+        }
+        return result;
+    }
+
+    /** The attributes up to END as [name, value] pairs, the values as WML
+     *  text: a dollar sign "$$", a variable "$(name:conv)".  A processing
+     *  instruction (pi) is one such pair, its data read as it is. */
+    private decodeAttributeList(pi: boolean): [string, string][] {
+        const attrs: [string, string][] = [];
         let currentAttrName = '';
         let currentAttrValue = '';
+        const lit = (v: string) => pi ? v : dollars(v);
 
         while (this.pos < this.data.length) {
             const token = this.peekByte();
@@ -314,9 +352,7 @@ class WbxmlDecoder {
             if (token === END) {
                 this.readByte(); // consume END
                 // Flush current attribute
-                if (currentAttrName) {
-                    result += ` ${currentAttrName}="${this.escapeXmlAttr(currentAttrValue)}"`;
-                }
+                if (currentAttrName) { attrs.push([currentAttrName, currentAttrValue]); }
                 break;
             }
 
@@ -328,13 +364,13 @@ class WbxmlDecoder {
             if (token === SWITCH_PAGE) {
                 this.attrPage = this.readByte();
             } else if (token === STR_I) {
-                currentAttrValue += this.readTerminatedString();
+                currentAttrValue += lit(this.readTerminatedString());
             } else if (token === STR_T) {
                 const offset = this.readMbUint32();
-                currentAttrValue += this.getStringTableEntry(offset);
+                currentAttrValue += lit(this.getStringTableEntry(offset));
             } else if (token === ENTITY) {
                 const charCode = this.readMbUint32();
-                currentAttrValue += `&#${charCode};`;
+                currentAttrValue += lit(fromCodePoint(charCode));
             } else if (token === EXT_I_0 || token === EXT_I_1 || token === EXT_I_2) {
                 const varName = this.readTerminatedString();
                 if (token === EXT_I_0) { currentAttrValue += `$(${varName}:escape)`; }
@@ -353,18 +389,14 @@ class WbxmlDecoder {
                 this.pos += len;
             } else if (token === LITERAL) {
                 // LITERAL attribute start — name from string table
-                if (currentAttrName) {
-                    result += ` ${currentAttrName}="${this.escapeXmlAttr(currentAttrValue)}"`;
-                }
+                if (currentAttrName) { attrs.push([currentAttrName, currentAttrValue]); }
                 const offset = this.readMbUint32();
                 currentAttrName = this.getStringTableEntry(offset);
                 currentAttrValue = '';
             } else if (token >= ATTR_START_MIN && token <= ATTR_START_MAX) {
                 // Attribute start token
                 // Flush previous attribute
-                if (currentAttrName) {
-                    result += ` ${currentAttrName}="${this.escapeXmlAttr(currentAttrValue)}"`;
-                }
+                if (currentAttrName) { attrs.push([currentAttrName, currentAttrValue]); }
 
                 const attrInfo = this.attrPage === 0 ? ATTR_START_BY_TOKEN[token] : undefined;
                 if (this.attrPage !== 0) {
@@ -386,7 +418,7 @@ class WbxmlDecoder {
             }
         }
 
-        return result;
+        return attrs;
     }
 
     private readByte(): number {
@@ -452,18 +484,17 @@ class WbxmlDecoder {
         return WbxmlDecoder.NAMED_ENTITIES[code] || `&#${code};`;
     }
 
+    // The invisible no-break and soft hyphens as WML's entities (WML 1.3: 6.2)
     private escapeXml(str: string): string {
         return str
             .replace(/&/g, '&amp;')
             .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;');
+            .replace(/>/g, '&gt;')
+            .replace(/\u00A0/g, '&nbsp;')
+            .replace(/\u00AD/g, '&shy;');
     }
 
     private escapeXmlAttr(str: string): string {
-        return str
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;');
+        return this.escapeXml(str).replace(/"/g, '&quot;');
     }
 }

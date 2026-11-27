@@ -60,7 +60,7 @@ export const enum Opcode {
     // Function calls
     CALL            = 0x09,     // uint8 func_index
     CALL_LIB        = 0x0A,     // uint8 func_index, uint8 lib_index (nargs from stdlib table)
-    CALL_LIB_W      = 0x0B,     // uint16 func_index, uint8 lib_index (nargs from stdlib table)
+    CALL_LIB_W      = 0x0B,     // uint8 func_index, uint16 lib_index (nargs from stdlib table)
     CALL_URL        = 0x0C,     // uint8 url_index, uint8 func_index, uint8 nargs
     CALL_URL_W      = 0x0D,     // uint16 url_index, uint16 func_index, uint8 nargs
 
@@ -248,7 +248,7 @@ export const OPCODE_INFO: Record<number, InstructionInfo> = {
     [Opcode.TJUMP_BW_W]:    { name: 'TJUMP_BW_W',    operandBytes: 2, description: 'Test-jump backward uint16 offset' },
     [Opcode.CALL]:          { name: 'CALL',           operandBytes: 1, description: 'Call local function' },
     [Opcode.CALL_LIB]:      { name: 'CALL_LIB',      operandBytes: 2, description: 'Call library function (func_id, lib_id)' },
-    [Opcode.CALL_LIB_W]:    { name: 'CALL_LIB_W',    operandBytes: 3, description: 'Call library function (wide func_id, lib_id)' },
+    [Opcode.CALL_LIB_W]:    { name: 'CALL_LIB_W',    operandBytes: 3, description: 'Call library function (func_id, wide lib_id)' },
     [Opcode.CALL_URL]:      { name: 'CALL_URL',       operandBytes: 3, description: 'Call external URL function' },
     [Opcode.CALL_URL_W]:    { name: 'CALL_URL_W',     operandBytes: 5, description: 'Call external URL function (wide)' },
     [Opcode.LOAD_VAR]:      { name: 'LOAD_VAR',      operandBytes: 1, description: 'Load variable' },

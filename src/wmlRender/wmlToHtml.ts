@@ -116,7 +116,30 @@ function resolveImageSrc(src: string, dirName: string): string {
     if (!fs.existsSync(absPath)) {
         return escapeHtml(src);
     }
+    return localImageDataUri(absPath) || escapeHtml(src);
+}
 
+/**
+ * An image src substituted at run time (WML 1.3: 10.3.1, 11.9), which the
+ * webview asks for: the local file it names, relative to the deck's folder,
+ * as a data URI, or '' when there is none.  The URL is escape-converted, so
+ * "%20" is a space; a query or fragment names no file.
+ */
+export function previewImageDataUri(url: string, dirName: string): string {
+    let file = url.replace(/[?#].*$/, '');
+    if (!file || /^[a-z][a-z0-9+.-]*:/i.test(file)) { return ''; }
+    try { file = decodeURIComponent(file); } catch { /* as written */ }
+    const absPath = path.resolve(dirName, file);
+    try {
+        if (!fs.statSync(absPath).isFile()) { return ''; }
+    } catch {
+        return '';
+    }
+    return localImageDataUri(absPath);
+}
+
+/** A local image file as a data URI (WBMP as SVG), or '' */
+function localImageDataUri(absPath: string): string {
     const ext = path.extname(absPath).toLowerCase();
 
     if (ext === '.wbmp') {
@@ -138,7 +161,7 @@ function resolveImageSrc(src: string, dirName: string): string {
         const data = fs.readFileSync(absPath);
         return `data:${mime};base64,${data.toString('base64')}`;
     } catch {
-        return escapeHtml(src);
+        return '';
     }
 }
 

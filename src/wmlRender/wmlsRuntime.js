@@ -747,11 +747,13 @@ var __wmls = (function() {
     loadString: function(url, contentType) {
       // WMLScript Libraries: 10.14 loadString. The runtime cannot block on a network fetch; a host may provide
       // content synchronously via rt.onLoadString (kept in sync with the VM's
-      // ctx.onLoadString in stdlib.ts). Absent/unavailable/bad type ⇒ invalid.
+      // ctx.onLoadString in stdlib.ts): the content, or a failed load's HTTP status (a
+      // number, returned as it is). Absent/no way to load/bad type ⇒ invalid.
       var ct = String(contentType === undefined ? '' : contentType);
-      if (!/^text\/\S+$/.test(ct)) { return undefined; }   // erroneous content type
+      if (!/^text\/[^\s,]+$/.test(ct)) { return undefined; }   // erroneous: one type, no spaces
       if (typeof rt.onLoadString !== 'function') { return undefined; }
       var body = rt.onLoadString(String(url === undefined ? '' : url), ct);
+      if (typeof body === 'number') { return body; }
       return (body === undefined || body === null) ? undefined : String(body);
     }
   };

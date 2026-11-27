@@ -30,6 +30,7 @@ import {
     encodeMbUint32,
 } from './opcodes';
 import { Parser } from './parser';
+import { validateWmlsText, Severity } from './validator';
 
 export class CompileError extends Error {
     constructor(message: string, public line: number, public column: number) {
@@ -968,14 +969,37 @@ export class WmlscCompiler {
     }
 }
 
+/**
+ * WMLScript: 6 WMLSCRIPT CORE
+ *
+ * A unit with one of the compile-time errors WAP-193 names (the
+ * validator's errors: literals out of range, reserved words as names,
+ * duplicate declarations, a local call with the wrong number of arguments,
+ * misplaced pragmas, no extern function...) is not compiled
+ */
+function refuseCompileErrors(source: string): void {
+    const err = validateWmlsText(source).find((d) => d.severity === Severity.Error);
+    if (err) { throw new CompileError(err.message, err.line + 1, err.col + 1); }
+}
+
+/** `strict` (the default: the gateway, the compile and run commands, the
+ *  debugger) refuses those errors; a browser running a script it fetched
+ *  passes false and runs what it can, as the C browser does (its
+ *  WMLS_STRICT is 0, its wmlsc tool's 1) */
+export interface CompileOptions {
+    strict?: boolean;
+}
+
 // Convenience function
-export function compileWmls(source: string): Buffer {
+export function compileWmls(source: string, options: CompileOptions = {}): Buffer {
+    if (options.strict !== false) { refuseCompileErrors(source); }
     const compiler = new WmlscCompiler();
     return compiler.compile(source);
 }
 
 // Convenience function — compile and also return per-function debug info (see DebugInfo).
-export function compileWmlsWithDebugInfo(source: string): { bytecode: Buffer } & DebugInfo {
+export function compileWmlsWithDebugInfo(source: string, options: CompileOptions = {}): { bytecode: Buffer } & DebugInfo {
+    if (options.strict !== false) { refuseCompileErrors(source); }
     const compiler = new WmlscCompiler();
     return compiler.compileWithDebugInfo(source);
 }

@@ -84,11 +84,18 @@ function log(msg: string): void {
 // ── WSP status conversion ───────────────────────────────────────
 
 // WSP: 8.2.3.3 Reply
+//
+// HTTP status → WSP status, WSP Table 36 (Status Code Assignments):
+// 1xx-3xx are class << 4 | detail; the 4xx run on past 0x4F (416 = 0x50,
+// 417 = 0x51) and the 5xx start at 0x60.  A status the table has no
+// code for gets its class's first one.
 function httpToWspStatus(httpStatus: number): number {
-    let hi = Math.floor(httpStatus / 100);
+    const hi = Math.floor(httpStatus / 100);
     const lo = httpStatus % 100;
-    if (hi >= 6) { hi = 6; }
-    return ((hi & 0x0F) << 4) | (lo & 0x0F);
+    const assigned = (hi === 1 && lo <= 1) || (hi === 2 && lo <= 6) ||
+        (hi === 3 && lo <= 7 && lo !== 6) || (hi === 4 && lo <= 17) || (hi === 5 && lo <= 5);
+    if (!assigned) { return hi >= 1 && hi <= 4 ? hi << 4 : 0x60; }
+    return hi === 5 ? 0x60 + lo : (hi << 4) + lo;
 }
 
 // ── WSP PDU building ────────────────────────────────────────────

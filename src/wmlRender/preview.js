@@ -128,6 +128,31 @@ function wmlSetPhoneFrame(show) {
     if (vscodeApi) { vscodeApi.postMessage({ type: 'setPhoneFrame', show: show }); }
 }
 
+// WML 1.3: 10.3.1, 11.9: an image whose src has variables, each time its
+// substituted URL changes (updateImages in wml-engine.js).  The webview reads
+// no files and no WBMP, so the extension sends the file as a data URI; the
+// HTTP-server preview loads the URL itself (the server serves WBMP as SVG).
+var _wmlImageRequests = 0;
+function wmlLoadImage(img, url) {
+    var vscodeApi = wmlsGetVsCodeApi();
+    if (!vscodeApi || /^(https?|data):/i.test(url)) { img.setAttribute('src', url); return; }
+    var id = 'img-' + (++_wmlImageRequests);
+    img.setAttribute('data-img-id', id);    // the latest request wins
+    vscodeApi.postMessage({ type: 'wmlImage', src: url, id: id });
+}
+
+if (typeof window !== 'undefined' && window.addEventListener) {
+    window.addEventListener('message', function(e) {
+        var msg = e.data;
+        if (!msg || msg.type !== 'wmlImageData') { return; }
+        document.querySelectorAll('.wml-img').forEach(function(img) {
+            if (img.getAttribute('data-img-id') !== msg.id) { return; }
+            if (msg.dataUri) { img.setAttribute('src', msg.dataUri); }
+            else { img.removeAttribute('src'); }    // alt shows (11.9)
+        });
+    });
+}
+
 // WMLScript: 8.3.4 URL Calls and Parameter Passing
 //
 // Convert parsed WMLScript call args into JS values for the transpiled runtime.
@@ -215,17 +240,6 @@ document.addEventListener('DOMContentLoaded', function() {
     // Nothing answers the Phone/Plain switch outside VS Code.
     var frameSwitch = document.getElementById('frame-switch');
     if (frameSwitch && !wmlsGetVsCodeApi()) { frameSwitch.parentNode.removeChild(frameSwitch); }
-
-    // Handle onpick on select options
-    document.querySelectorAll('select').forEach(function(sel) {
-        sel.addEventListener('change', function() {
-            var opt = sel.options[sel.selectedIndex];
-            if (opt) {
-                var onpick = opt.getAttribute('data-onpick');
-                if (onpick) wmlNavigate(onpick);
-            }
-        });
-    });
 
     var firstCard = document.querySelector('.wml-card');
     if (firstCard) {

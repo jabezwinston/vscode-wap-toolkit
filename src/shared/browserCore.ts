@@ -605,7 +605,7 @@ export class WapBrowserCore {
         }
         const mod = fetched.isCompiled
             ? decodeWmlsc(fetched.body)
-            : decodeWmlsc(compileWmls(decodeDeck(fetched.body, fetched.charset).text));
+            : decodeWmlsc(compileWmls(decodeDeck(fetched.body, fetched.charset).text, { strict: false }));
         const access = checkUnitAccess(mod, referrer, url);
         if (!access.allowed) { throw new Error(access.reason); }
         const vm = new WmlsVM(mod, { context: ctx, maxSteps: 10000000 });

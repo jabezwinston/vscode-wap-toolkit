@@ -12,7 +12,7 @@
  *  defined in the WAP-193-WMLScript specification.
  */
 import {
-    Opcode, WmlsType,
+    Opcode, WmlsType, StdLibrary,
     classifyOpcode,
     STDLIB_NARGS,
 } from './opcodes';
@@ -454,10 +454,11 @@ export class WmlsVM {
                 break;
             }
             case Opcode.CALL_LIB_W: {
-                const fhi = bc[frame.pc++];
-                const flo = bc[frame.pc++];
-                const lindex = bc[frame.pc++];
-                const findex = (fhi << 8) | flo;
+                // findex8 lindex16 (WMLScript: 10.5.2.5)
+                const findex = bc[frame.pc++];
+                const lhi = bc[frame.pc++];
+                const llo = bc[frame.pc++];
+                const lindex = (lhi << 8) | llo;
                 const nargs = STDLIB_NARGS[lindex]?.[findex] ?? 0;
                 this.doCallLib(lindex, findex, nargs);
                 break;
@@ -783,6 +784,18 @@ export class WmlsVM {
         const args: WmlsValue[] = [];
         for (let i = 0; i < nargs; i++) {
             args.unshift(this.pop());
+        }
+
+        // WMLScript Libraries: 6.3 Error Handling: an invalid argument makes
+        // the result invalid, with no side effects — except for Lang.exit and
+        // Lang.abort, String.toString (WMLScript Libraries: 7.11, 7.12, 9.15),
+        // which take one, and the Console
+        const takesInvalid = libIndex === StdLibrary.Console ||
+            (libIndex === StdLibrary.Lang && (funcIndex === 10 || funcIndex === 11)) ||
+            (libIndex === StdLibrary.String && funcIndex === 14);
+        if (!takesInvalid && args.some((a) => a.type === WmlsType.Invalid)) {
+            this.push(mkInvalid());
+            return;
         }
 
         const result = func(args);

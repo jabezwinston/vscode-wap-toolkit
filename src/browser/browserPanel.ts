@@ -293,7 +293,7 @@ export class WapBrowserPanel {
         const source = await this.core.fetchSource(absScriptUrl);
         if (source != null) {
             try {
-                const { bytecode, ...debugInfo } = compileWmlsWithDebugInfo(source);
+                const { bytecode, ...debugInfo } = compileWmlsWithDebugInfo(source, { strict: false });
                 browserDebugSession.registerScript(sourceUri, { module: decodeWmlsc(bytecode), ...debugInfo });
                 await this.openVirtualDoc(sourceUri, source, takeFocus);
                 return sourceUri;

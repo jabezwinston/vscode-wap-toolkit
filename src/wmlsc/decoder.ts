@@ -14,7 +14,7 @@
 import { charsetByMib, decodeText } from '../shared/charset';
 import {
     Opcode, ConstantType, PragmaType,
-    OPCODE_INFO,
+    OPCODE_INFO, WMLSC_VERSION_1_1,
     STDLIB_FUNCTIONS, STDLIB_NARGS, StdLibrary,
     classifyOpcode, decodeMbUint32,
 } from './opcodes';
@@ -50,6 +50,11 @@ export interface WmlscModule {
     pragmas: WmlscPragma[];
     functions: WmlscFunction[];
     functionNames: WmlscFunctionName[];
+    /** Read from a unit (decodeWmlsc): its CodeSize, the bytes after
+     *  CodeSize, and those after the last function (WMLScript: 11.1) */
+    codeSize?: number;
+    contentSize?: number;
+    trailing?: number;
 }
 
 export interface DisassembledInstruction {
@@ -85,11 +90,13 @@ class WmlscDecoder {
     //  - 9.3 Bytecode Header
     decode(): WmlscModule {
         const version = this.readUint8();
-        this.readMbUint32(); // code size
+        const codeSize = this.readMbUint32();
+        const contentSize = this.data.length - this.pos;
 
         const constants = this.readConstantPool();
         const pragmas = this.readPragmaPool();
         const { functions, functionNames } = this.readFunctionPool();
+        const trailing = this.data.length - this.pos;
 
         // Resolve function names
         for (const fn of functionNames) {
@@ -98,7 +105,7 @@ class WmlscDecoder {
             }
         }
 
-        return { version, constants, pragmas, functions, functionNames };
+        return { version, constants, pragmas, functions, functionNames, codeSize, contentSize, trailing };
     }
 
     // WMLScript: 9.4 Constant Pool
@@ -229,6 +236,7 @@ class WmlscDecoder {
     }
 
     private readUint8(): number {
+        this.checkSize(1);
         return this.data[this.pos++];
     }
 
@@ -285,15 +293,46 @@ export function verifyModule(mod: WmlscModule): string[] {
     const nConst = mod.constants.length;
     const nFunc = mod.functions.length;
 
-    // WMLScript: 11.1 Integrity Check: a name's index must be an existing function
+    // WMLScript: 11.1 Integrity Check: the major version this interpreter's,
+    // the minor one no newer
+    if ((mod.version >> 4) !== (WMLSC_VERSION_1_1 >> 4) || (mod.version & 0x0F) > (WMLSC_VERSION_1_1 & 0x0F)) {
+        errors.push(`bytecode version ${(mod.version >> 4) + 1}.${mod.version & 0x0F} is not supported`);
+    }
+    // ... the CodeSize the size of the content, exactly, and nothing after
+    // the function pool
+    if (mod.codeSize !== undefined && mod.codeSize !== mod.contentSize) {
+        errors.push(`CodeSize ${mod.codeSize} is not the ${mod.contentSize} bytes of the unit`);
+    }
+    if (mod.trailing) { errors.push(`${mod.trailing} bytes after the last function`); }
+    // ... access domain and path, and meta-information, each a string constant
+    const isString = (i: number) => i < nConst && (mod.constants[i].type === ConstantType.UTF8_STRING ||
+        mod.constants[i].type === ConstantType.EMPTY_STRING || mod.constants[i].type === ConstantType.EXT_STRING);
+    mod.pragmas.forEach((p, k) => {
+        if (p.indices.some((i) => !isString(i))) { errors.push(`pragma ${k} names a constant that is not a string`); }
+    });
+    // ... at least one function name, each a WMLScript name of an existing function
+    if (!mod.functionNames.length) { errors.push('the function name table is empty'); }
     for (const fn of mod.functionNames) {
         if (fn.index >= nFunc) { errors.push(`function name "${fn.name}" for function ${fn.index} ≥ ${nFunc}`); }
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(fn.name)) { errors.push(`"${fn.name}" is not a function name`); }
     }
 
     for (let fi = 0; fi < mod.functions.length; fi++) {
         const bc = mod.functions[fi].bytecode;
         const fname = mod.functions[fi].name ?? `function_${fi}`;
         const flag = (at: number, msg: string) => errors.push(`${fname}@${at}: ${msg}`);
+        // WMLScript: 11.1 Integrity Check: at most 256 arguments and locals;
+        // 11.2: a variable reference within them, a library function one the
+        // libraries have
+        const nVars = mod.functions[fi].numArgs + mod.functions[fi].numLocals;
+        if (nVars > 256) { flag(0, `${nVars} arguments and local variables (256 at most)`); }
+        const checkVar = (at: number, v: number) => {
+            if (v >= nVars) { flag(at, `variable ${v} ≥ ${nVars}`); }
+        };
+        const checkLib = (at: number, f: number, l: number) => {
+            const lib = Object.prototype.hasOwnProperty.call(STDLIB_FUNCTIONS, l) ? STDLIB_FUNCTIONS[l] : undefined;
+            if (!lib || f >= lib.length) { flag(at, `library function ${l}.${f} does not exist`); }
+        };
         // WMLScript: 11.2 Runtime Validity Checks: a jump's target must be the start of an instruction (or the
         // function's end); checked once every start is known
         const starts = new Set<number>([bc.length]);
@@ -310,6 +349,16 @@ export function verifyModule(mod: WmlscModule): string[] {
                 if (!meta) { flag(start, `unknown opcode 0x${byte.toString(16)}`); break; }
                 if (pos + meta.operandBytes > bc.length) { flag(start, `truncated operands for ${meta.name}`); break; }
                 switch (byte) {
+                    case Opcode.LOAD_VAR: case Opcode.STORE_VAR: case Opcode.INCR_VAR:
+                    case Opcode.DECR_VAR: case Opcode.ADD_ASG: case Opcode.SUB_ASG:
+                        checkVar(start, bc[pos]);
+                        break;
+                    case Opcode.CALL_LIB:
+                        checkLib(start, bc[pos], bc[pos + 1]);
+                        break;
+                    case Opcode.CALL_LIB_W:
+                        checkLib(start, bc[pos], (bc[pos + 1] << 8) | bc[pos + 2]);
+                        break;
                     case Opcode.LOAD_CONST:
                         if (bc[pos] >= nConst) { flag(start, `LOAD_CONST index ${bc[pos]} ≥ ${nConst}`); }
                         break;
@@ -347,7 +396,10 @@ export function verifyModule(mod: WmlscModule): string[] {
                 switch (info.packedKind) {
                     case 'CALL_LIB_S':
                         if (pos + 1 > bc.length) { flag(start, `truncated CALL_LIB_S`); pos = bc.length; }
-                        else { pos += 1; }
+                        else { checkLib(start, info.embeddedValue!, bc[pos]); pos += 1; }
+                        break;
+                    case 'LOAD_VAR_S': case 'STORE_VAR_S': case 'INCR_VAR_S':
+                        checkVar(start, info.embeddedValue!);
                         break;
                     case 'LOAD_CONST_S':
                         if (info.embeddedValue! >= nConst) { flag(start, `LOAD_CONST_S index ${info.embeddedValue} ≥ ${nConst}`); }
@@ -433,10 +485,11 @@ export function disassembleBytecode(bytecode: Uint8Array, constants: WmlscConsta
                     break;
                 }
                 case Opcode.CALL_LIB_W: {
-                    const fhi = bytecode[pos++]; const flo = bytecode[pos++];
-                    const lindex = bytecode[pos++];
-                    bytes.push(fhi, flo, lindex);
-                    const findex = (fhi << 8) | flo;
+                    // findex8 lindex16 (WMLScript: 10.5.2.5)
+                    const findex = bytecode[pos++];
+                    const lhi = bytecode[pos++]; const llo = bytecode[pos++];
+                    bytes.push(findex, lhi, llo);
+                    const lindex = (lhi << 8) | llo;
                     const nargs = STDLIB_NARGS[lindex]?.[findex] ?? 0;
                     operands = `Lib${lindex}.func${findex}(${nargs} args)`;
                     break;

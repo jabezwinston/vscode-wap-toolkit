@@ -340,9 +340,11 @@ export interface LibraryContext {
 
     // Synchronous content provider for URL.loadString (WMLScript Libraries: 10.14). The interpreter
     // cannot itself block on a network fetch, so a host may supply already-fetched
-    // content here; absent ⇒ loadString returns invalid. Returning null/undefined
-    // signals the resource could not be loaded (also ⇒ invalid).
-    onLoadString?: (url: string, contentType: string) => string | null | undefined;
+    // content here; absent ⇒ loadString returns invalid. A host whose load fails returns
+    // the scheme's error code, for HTTP and WSP the HTTP status (a number), which
+    // loadString returns; null/undefined: the URL cannot be loaded here (⇒ invalid).
+    // The host's request accepts only contentType (10.14: an Accept of that type alone).
+    onLoadString?: (url: string, contentType: string) => string | number | null | undefined;
 
     // Integer-only-device support (WMLScript: 13): when false the Float library returns invalid (WMLSSL-046)
     floatSupported?: boolean;
@@ -359,6 +361,20 @@ export function createDefaultContext(): LibraryContext {
 // === Lang Library (0) ===
 // WMLScript Libraries: 7 LANG
 function langLib(ctx: LibraryContext): StdLibFunction[] {
+    // WMLScript Libraries:
+    //  - 7.4 parseInt
+    //  - 7.5 parseFloat
+    //
+    // The value converted to a string, read up to what cannot be part of
+    // the number: invalid when nothing can (or past 32 bits)
+    const parseIntOf = (v: WmlsValue): WmlsValue => {
+        const n = parseInt(toString(v).trim(), 10);
+        return isNaN(n) ? mkInvalid() : mkInt(n);
+    };
+    const parseFloatOf = (v: WmlsValue): WmlsValue => {
+        const n = parseFloat(toString(v).trim());
+        return isNaN(n) ? mkInvalid() : mkFloat(n);
+    };
     return [
         // 0: abs(value) — integer→integer, floating-point→floating-point (WMLScript Libraries: 7.1)
         (args) => {
@@ -384,49 +400,16 @@ function langLib(ctx: LibraryContext): StdLibFunction[] {
             return bn > an ? asNumberValue(b, bn) : asNumberValue(a, an);
         },
         // 3: parseInt(str)
-        (args) => {
-            const s = toString(args[0]).trim();
-            const n = parseInt(s, 10);
-            return isNaN(n) ? mkInvalid() : mkInt(n);
-        },
+        (args) => parseIntOf(args[0]),
         // 4: parseFloat(str)
-        (args) => {
-            const s = toString(args[0]).trim();
-            const n = parseFloat(s);
-            return isNaN(n) ? mkInvalid() : mkFloat(n);
-        },
-        // 5: isInt(value)
-        (args) => {
-            const arg = args[0];
-            if (arg.type === WmlsType.Invalid) return mkInvalid();
-
-            if (arg.type === WmlsType.Integer) return mkBool(true);
-            if (arg.type === WmlsType.Float) return mkBool(Number.isInteger(arg.value));
-            if (arg.type === WmlsType.String) {
-                const s = arg.value.trim();
-                if (s.length === 0) return mkBool(false);
-                const n = Number(s);
-                return mkBool(!isNaN(n) && Number.isInteger(n));
-            }
-
-            return mkBool(false);
-        },
-        // 6: isFloat(value)
-        (args) => {
-            const arg = args[0];
-            if (arg.type === WmlsType.Invalid) return mkInvalid();
-
-            if (arg.type === WmlsType.Integer) return mkBool(true);
-            if (arg.type === WmlsType.Float) return mkBool(true);
-            if (arg.type === WmlsType.String) {
-                const s = arg.value.trim();
-                if (s.length === 0) return mkBool(false);
-                const n = Number(s);
-                return mkBool(!isNaN(n));
-            }
-
-            return mkBool(false);
-        },
+        (args) => parseFloatOf(args[0]),
+        // 5: isInt(value) — whether parseInt(value) gives an integer (WMLScript Libraries: 7.6):
+        // isInt(" 123.33") is true
+        (args) => args[0].type === WmlsType.Invalid ? mkInvalid()
+            : mkBool(parseIntOf(args[0]).type !== WmlsType.Invalid),
+        // 6: isFloat(value) — whether parseFloat(value) gives a float (WMLScript Libraries: 7.7)
+        (args) => args[0].type === WmlsType.Invalid ? mkInvalid()
+            : mkBool(parseFloatOf(args[0]).type !== WmlsType.Invalid),
         // 7: maxInt()
         () => mkInt(2147483647),
         // 8: minInt()
@@ -520,11 +503,13 @@ function stringLib(_ctx: LibraryContext): StdLibFunction[] {
         (args) => mkInt(toString(args[0]).length),
         // 1: isEmpty(str)
         (args) => mkBool(toString(args[0]).length === 0),
-        // 2: charAt(str, index)
+        // 2: charAt(str, index) — an index that is not a number is invalid
+        // (WMLScript Libraries: 6.3, 9.3)
         (args) => {
             const s = toString(args[0]);
-            const i = toInteger(args[1]);
-            if (i === null || i < 0 || i >= s.length) { return mkString(''); }
+            const i = floatInt(args[1]);
+            if (i === null) { return mkInvalid(); }
+            if (i < 0 || i >= s.length) { return mkString(''); }
             return mkString(s[i]);
         },
         // 3: subString(str, start, length)
@@ -672,12 +657,12 @@ function urlLib(ctx: LibraryContext): StdLibFunction[] {
             const h = base.indexOf('#');
             return mkString(h >= 0 ? base.slice(0, h) : base);
         },
-        // 9: getReferer() — relative to the unit (WMLScript Libraries: 10.10)
-        () => mkString(relativeToUnit(ctx.refererUrl ?? '', ctx.baseUrl ?? '')),
+        // 9: getReferer() — the smallest relative URL, from the unit (WMLScript Libraries: 10.10)
+        () => mkString(smallestRelative(ctx.refererUrl ?? '', ctx.baseUrl ?? '')),
         // 10: resolve(baseUrl, embeddedUrl) per RFC2396 (WMLScript Libraries: 10.11)
         (args) => {
-            try { return mkString(new URL(toString(args[1]), toString(args[0])).toString()); }
-            catch { return mkInvalid(); }
+            const base = toString(args[0]), ref = toString(args[1]);
+            return isValidUrl(base) && isValidUrl(ref) ? mkString(resolveUrl(base, ref)) : mkInvalid();
         },
         // 11: escapeString(str) — lowercase %xx for non-unreserved chars (WMLScript Libraries: 10.12)
         (args) => {
@@ -691,13 +676,15 @@ function urlLib(ctx: LibraryContext): StdLibFunction[] {
         },
         // 13: loadString(url, contentType) — WMLScript Libraries: 10.14. The interpreter cannot block
         // on a network fetch, so a host may provide content synchronously via
-        // ctx.onLoadString; absent (or content unavailable / bad type) ⇒ invalid.
+        // ctx.onLoadString: the content, or a failed load's error code (the HTTP status);
+        // absent (or no way to load the URL) or a bad type ⇒ invalid.
         (args) => {
             const url = toString(args[0]);
             const ct = toString(args[1] ?? mkString(''));
-            if (!/^text\/\S+$/.test(ct)) { return mkInvalid(); }   // erroneous content type
+            if (!/^text\/[^\s,]+$/.test(ct)) { return mkInvalid(); }   // erroneous: one type, no spaces
             if (!isValidUrl(url)) { return mkInvalid(); }
             const body = ctx.onLoadString?.(url, ct);
+            if (typeof body === 'number') { return mkInt(body); }
             return body === undefined || body === null ? mkInvalid() : mkString(body);
         },
     ];
@@ -717,6 +704,101 @@ const WML_VAR_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
  * alone when it is in the unit's directory, else `abs` itself, as
  * wap-browser-c does
  */
+/**
+ * WMLScript Libraries: 10.10 getReferer
+ *
+ * The smallest relative URL for `ref` seen from `base` (the C browser's
+ * wml_url_relative, browser.js relativeReferer): from another site, ref
+ * itself; else the shorter of its path and the path relative to base's
+ * directory ("../" up).  The query and fragment stay.
+ */
+export function smallestRelative(ref: string, base: string): string {
+    const origin = (u: string) => {
+        const m = /^[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\/?#]*/.exec(u);
+        return m ? m[0] : null;
+    };
+    const o = origin(ref);
+    if (!o || o !== origin(base) || ref.charAt(o.length) !== '/') { return ref; }
+    let k = o.length, dir = o.length;
+    while (k < ref.length && ref.charAt(k) === base.charAt(k) && ref.charAt(k) !== '?') {
+        if (ref.charAt(k++) === '/') { dir = k - 1; }
+    }
+    const rest = base.substring(dir + (base.charAt(dir) === '/' ? 1 : 0)).split(/[?#]/)[0];
+    const ups = rest.split('/').length - 1;
+    const tail = ref.substring(dir + 1), path = ref.substring(o.length);
+    if ((!ups && (!tail || /^[^\/?]*:/.test(tail))) || 3 * ups + tail.length >= path.length) {
+        return path;
+    }
+    return new Array(ups + 1).join('../') + tail;
+}
+
+/**
+ * RFC 3986: 5.2.4 Remove Dot Segments
+ *
+ * remove_dot_segments on the path at the start of p (up to '?' or '#')
+ */
+function removeDots(p: string): string {
+    const cut = p.search(/[?#]/);
+    let input = cut < 0 ? p : p.substring(0, cut);
+    const tail = cut < 0 ? '' : p.substring(cut);
+    let out = '';
+    while (input) {
+        if (input.startsWith('../')) { input = input.substring(3); }
+        else if (input.startsWith('./')) { input = input.substring(2); }
+        else if (input.startsWith('/./')) { input = input.substring(2); }
+        else if (input === '/.') { input = '/'; }
+        else if (input.startsWith('/../') || input === '/..') {
+            input = input === '/..' ? '/' : input.substring(3);
+            out = out.substring(0, Math.max(0, out.lastIndexOf('/')));
+        } else if (input === '.' || input === '..') { input = ''; }
+        else {
+            const m = /^\/?[^/]*/.exec(input)![0];
+            out += m;
+            input = input.substring(m.length);
+        }
+    }
+    return out + tail;
+}
+
+/**
+ * WMLScript Libraries: 10.11 resolve
+ * RFC 3986: 5.2.2 Transform References
+ *
+ * `ref` resolved against `base` as the C browser does (wml_url_resolve):
+ * a ref with a scheme as it is, "//h/p" with base's scheme, "/p" with its
+ * authority, "?q" with its path, "#f" with all before its fragment, a
+ * relative path merged with base's directory, dot segments removed.  A
+ * base with an authority but no path has the path "/" ("http://a" + "?q"
+ * is "http://a/?q"); one with no authority just has ref joined to its
+ * directory.
+ */
+export function resolveUrl(base: string, ref: string): string {
+    if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(ref)) { return ref; }
+    const sm = /^[A-Za-z][A-Za-z0-9+.-]*:/.exec(base);
+    if (!sm || !base.startsWith('//', sm[0].length)) {
+        const dir = ref.startsWith('/') ? 0 : base.lastIndexOf('/') + 1;
+        return base.substring(0, dir) + ref;
+    }
+    const authEnd = sm[0].length + 2 + base.substring(sm[0].length + 2).search(/[/?#]|$/);
+    const origin = base.substring(0, authEnd);
+    const rest = base.substring(authEnd);
+    const pathEnd = authEnd + (rest.search(/[?#]/) < 0 ? rest.length : rest.search(/[?#]/));
+    const fragAt = base.indexOf('#', authEnd);
+    const queryEnd = fragAt < 0 ? base.length : fragAt;
+    const path = base.substring(authEnd, pathEnd) || '/';
+    if (ref.startsWith('//')) {
+        const a = sm[0].length + 2 + ref.substring(2).search(/[/?#]|$/);
+        const full = sm[0] + ref;
+        return full.substring(0, a) + removeDots(full.substring(a));
+    }
+    if (ref.startsWith('/')) { return origin + removeDots(ref); }
+    if (ref === '' || ref.startsWith('#')) {
+        return origin + path + base.substring(pathEnd, queryEnd) + ref;
+    }
+    if (ref.startsWith('?')) { return origin + path + ref; }
+    return origin + removeDots(path.substring(0, path.lastIndexOf('/') + 1) + ref);
+}
+
 export function relativeToUnit(abs: string, base: string): string {
     const dir = base.slice(0, base.lastIndexOf('/') + 1);
     if (!dir || !abs.startsWith(dir)) { return abs; }

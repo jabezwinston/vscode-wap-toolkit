@@ -405,42 +405,55 @@ function resolveImageSrc(src) {
     return src;
 }
 
+// Ask the extension for an image as a data URI (a WBMP converted).  The
+// latest request for an img is the one shown: after two quick picks the
+// first picture's late answer does not replace the second's.
+function requestImage(img, src, hide) {
+    var id = 'proxy-' + (++_proxyIdCounter);
+    _pendingProxies[id] = img;
+    img.setAttribute('data-proxy-id', id);
+    img.setAttribute('data-original-src', src);
+    if (hide) { img.style.visibility = 'hidden'; }
+    vscodeApi.postMessage({ type: 'proxyImage', src: src, id: id });
+}
+
+// WML 1.3: 10.3.1, 11.9: an image whose src has variables, each time its
+// substituted URL changes (updateImages in wml-engine.js).  It always goes
+// through the extension, which reads WBMP whatever its URL looks like.  The
+// picture shown stays until the new one comes.
+function wmlLoadImage(img, url) {
+    var src = resolveImageSrc(url);
+    if (!src) {
+        img.removeAttribute('src');
+        img.removeAttribute('data-proxy-id');
+        return;
+    }
+    requestImage(img, src, false);
+}
+
 function proxyWbmpImages() {
-    document.querySelectorAll('img.wml-img').forEach(function(img) {
+    // An image with data-src is loaded by wmlLoadImage
+    var fixed = Array.prototype.filter.call(document.querySelectorAll('img.wml-img'),
+        function(img) { return !img.hasAttribute('data-src'); });
+    fixed.forEach(function(img) {
         var src = resolveImageSrc(img.getAttribute('src') || '');
         if (src.match(/\.wbmp(\?|$)/i) || src.indexOf('image/vnd.wap.wbmp') !== -1) {
-            var id = 'proxy-' + (++_proxyIdCounter);
-            _pendingProxies[id] = img;
-            img.setAttribute('data-original-src', src);
-            img.style.visibility = 'hidden';
-            vscodeApi.postMessage({ type: 'proxyImage', src: src, id: id });
+            requestImage(img, src, true);
         }
     });
     // Also catch any images that fail to load (server may return WBMP without .wbmp extension)
-    document.querySelectorAll('img.wml-img').forEach(function(img) {
+    fixed.forEach(function(img) {
         img.addEventListener('error', function() {
             var s = resolveImageSrc(img.getAttribute('src') || '');
             if (s.indexOf('data:') === 0) return;  // already proxied
-            var id = 'proxy-' + (++_proxyIdCounter);
-            _pendingProxies[id] = img;
-            img.setAttribute('data-original-src', s);
-            vscodeApi.postMessage({ type: 'proxyImage', src: s, id: id });
+            requestImage(img, s, false);
         }, { once: true });
     });
 }
 
+// The fields' handlers; a select's onpick runs there (wml-engine.js)
 function initFormElements() {
     initWmlFormElements();
-    // Handle onpick on select options (browser-specific: wml-engine doesn't wire onpick)
-    document.querySelectorAll('.wml-select').forEach(function(sel) {
-        sel.addEventListener('change', function() {
-            var opt = sel.options[sel.selectedIndex];
-            if (opt) {
-                var onpick = opt.getAttribute('data-onpick');
-                if (onpick) wmlNavigate(onpick);
-            }
-        });
-    });
 }
 
 // ── Event Delegation (shared + browser-specific) ─────────────────
@@ -535,10 +548,17 @@ window.addEventListener('message', function(event) {
         case 'imageProxyResult':
             if (msg.id && _pendingProxies[msg.id]) {
                 var img = _pendingProxies[msg.id];
+                delete _pendingProxies[msg.id];
+                if (img.getAttribute('data-proxy-id') !== msg.id) {
+                    break;          // a later request for this img replaced it
+                }
                 if (msg.dataUri) {
                     img.src = msg.dataUri;
                     img.style.visibility = 'visible';
                 } else {
+                    // A substituted src that failed shows alt, not the
+                    // previous picture
+                    if (img.hasAttribute('data-src')) { img.removeAttribute('src'); }
                     // The bitmap could not be fetched or decoded — which is
                     // precisely when alt matters. WML 1.3: 11.9 makes alt the
                     // image's alternative representation for exactly this case,
@@ -548,7 +568,6 @@ window.addEventListener('message', function(event) {
                     if (!img.getAttribute('alt')) { img.alt = '[image]'; }
                     img.style.visibility = 'visible';
                 }
-                delete _pendingProxies[msg.id];
             }
             break;
 

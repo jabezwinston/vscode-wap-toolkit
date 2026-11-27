@@ -9,7 +9,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { wmlToHtml } from './wmlToHtml';
+import { wmlToHtml, previewImageDataUri } from './wmlToHtml';
 import { previewDebugBridge } from '../wmlsc/previewDebugBridge';
 
 export class WmlPreviewPanel {
@@ -39,6 +39,12 @@ export class WmlPreviewPanel {
                 this.navigateTo(String(msg.href || ''));
             } else if (msg && msg.type === 'wmlNavigateBack') {
                 this.navigateBack();
+            } else if (msg && msg.type === 'wmlImage') {
+                // An image src substituted at run time (preview.js wmlLoadImage)
+                const dataUri = this.currentDocument
+                    ? previewImageDataUri(String(msg.src || ''), path.dirname(this.currentDocument.fsPath))
+                    : '';
+                this.panel.webview.postMessage({ type: 'wmlImageData', id: msg.id, dataUri });
             } else if (msg && msg.type === 'setPhoneFrame') {
                 // The toolbar's Phone/Plain switch is the setting itself; the
                 // configuration listener below re-renders.

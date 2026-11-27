@@ -98,7 +98,9 @@ function convName(c) {
 //  - 10.3.1 Variable Substitution
 //  - 10.3.2 Parsing the Variable Substitution Syntax
 //  - 10.3.3 The Dollar-sign Character
-function substituteVars(str, hrefContext) {
+// An unset variable is left as written, unless unsetEmpty: then it is the
+// empty string, as 10.3.1 says (a browser's WML_STRICT_VARS).
+function substituteVars(str, hrefContext, unsetEmpty) {
     var defaultConv = hrefContext ? 'escape' : 'noesc';
     function convert(val, mode) {
         var conv = convName(mode) || defaultConv;
@@ -107,10 +109,11 @@ function substituteVars(str, hrefContext) {
         return val; // noesc
     }
     return str.replace(/\$\(([A-Za-z_][A-Za-z0-9_]*)(?::([A-Za-z]*))?\)/g, function(m, name, mode) {
-        if (wmlVars[name] === undefined) { return m; }
+        if (wmlVars[name] === undefined) { return unsetEmpty ? '' : m; }
         return convert(wmlVars[name], mode);
     }).replace(/\$([A-Za-z_][A-Za-z0-9_]*)/g, function(m, name) {
-        return wmlVars[name] !== undefined ? convert(wmlVars[name], null) : m;
+        if (wmlVars[name] === undefined) { return unsetEmpty ? '' : m; }
+        return convert(wmlVars[name], null);
     }).replace(/\$\$/g, '$');
 }
 
@@ -547,6 +550,29 @@ function wmlConvertValue(value, conversion) {
     return value;
 }
 
+// WML 1.3:
+//  - 10.3.1 Variable Substitution
+//  - 11.9 Images
+//
+// An image whose src (%HREF, escape conversion by default) or alt (%vdata)
+// refers to variables carries that text in data-src / data-alt (wmlTransform).
+// Each display substitutes it with the current values; a src that changed is
+// loaded by the host's wmlLoadImage(img, url) (the browser fetches WBMP
+// through the extension), or else set as the img's src.
+function updateImages(strictVars) {
+    document.querySelectorAll('.wml-img').forEach(function(img) {
+        var alt = img.getAttribute('data-alt');
+        if (alt !== null) { img.setAttribute('alt', substituteVars(alt, false, strictVars)); }
+        var src = img.getAttribute('data-src');
+        if (src === null) { return; }
+        var url = substituteVars(src, true, strictVars);
+        if (url === img.getAttribute('data-src-now')) { return; }
+        img.setAttribute('data-src-now', url);
+        if (typeof wmlLoadImage === 'function') { wmlLoadImage(img, url); }
+        else { img.setAttribute('src', url); }
+    });
+}
+
 // WML 1.3: 10.3.1 Variable Substitution
 function updateVariables() {
     // WML 1.3: 10.3.1 Variable Substitution: substituting an unset variable yields the empty
@@ -568,6 +594,7 @@ function updateVariables() {
             s.textContent = '';
         }
     });
+    updateImages(strictVars);
     // Sync wmlVars back to input fields
     document.querySelectorAll('.wml-input').forEach(function(inp) {
         var name = inp.getAttribute('name');
@@ -610,6 +637,7 @@ function updateVariables() {
                 });
             }
         }
+        if (sel.multiple) { pickedOptions(sel); }   // the selection shown; no event
     });
 }
 
@@ -937,13 +965,54 @@ function initWmlFormElements() {
             });
         }
     });
+    // A pick sets the select's name and iname variables, with no display
+    // side effect unless a task refreshes (WML 1.3: 11.6.2.1); then each
+    // picked option's onpick runs (11.6.2.2)
     document.querySelectorAll('.wml-select').forEach(function(sel) {
         sel.addEventListener('change', function() {
+            var picked = pickedOptions(sel);
             selectCommitVars(sel);
-            updateVariables();
+            picked.forEach(runOnpick);
         });
     });
-    updateVariables();
+    // No redraw here: the card is drawn once its fields have their initial
+    // values (11.6.2.1, 11.6.3), by the caller.  Drawn before, an image's
+    // src had $(v) still unset and was fetched as such (p/.wbmp).
+}
+
+// WML 1.3: 11.6.2.2 The Option Element
+//
+// The options a change picked: in a single-choice list the one now
+// selected (the one it replaced has no event); in a multiple-choice list
+// each one selected or de-selected since the selection was last noted
+// (the card's entry, a redraw, the last change).
+function pickedOptions(sel) {
+    var was = sel._wmlSelected || [];
+    var now = [], picked = [];
+    for (var i = 0; i < sel.options.length; i++) {
+        var o = sel.options[i];
+        now.push(!!o.selected);
+        if (sel.multiple ? !!o.selected !== !!was[i] : !!o.selected) { picked.push(o); }
+    }
+    sel._wmlSelected = now;
+    return picked;
+}
+
+// WML 1.3:
+//  - 9.10 Intrinsic Events
+//  - 11.6.2.2 The Option Element
+//
+// Run an option's onpick task: the onpick attribute (a go) or its
+// <onevent type="onpick">, which wmlTransform puts on the option as
+// data-onpick-* (an HTML option holds text only).  runTask reads it as a
+// task element's data-* attributes.
+function runOnpick(opt) {
+    var task = {
+        getAttribute: function(n) { return opt.getAttribute(n.replace(/^data-/, 'data-onpick-')); }
+    };
+    var href = task.getAttribute('data-href');
+    var action = task.getAttribute('data-action');
+    if (href || action) { runTask(task, href, action); }
 }
 
 /**
@@ -1055,6 +1124,7 @@ function initSelect(sel) {
     // Step 3 — pre-select option(s) named by the default index.
     for (var i = 0; i < nOpts; i++) { sel.options[i].selected = false; }
     defIdx.forEach(function(n) { sel.options[n - 1].selected = true; });
+    pickedOptions(sel);         // the selection a pick changes; no event
 
     // Step 2 — commit name / iname variables from the selection.
     selectCommitVars(sel);

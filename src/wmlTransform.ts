@@ -55,6 +55,11 @@ export type ImageResolver = (src: string) => string;
  */
 const escapeAttr = escapeHtmlKeepRefs;
 
+/** Whether text holds a variable reference, $(x) or $x; $$ is a literal $ (WML 1.3: 10.3.3) */
+function hasVarRef(s: string): boolean {
+    return /\$[(A-Za-z_]/.test(s.replace(/\$\$/g, ''));
+}
+
 function decodePairs(pairs: Array<{name: string, value: string}>): Array<{name: string, value: string}> {
     return pairs.map((p) => ({ name: decodeEntities(p.name), value: decodeEntities(p.value) }));
 }
@@ -115,6 +120,27 @@ export function methodToAttr(attrs: string): string {
  * Emit data-sendreferer when a <go sendreferer="true"> requests it (WML 1.3: 9.5.1). */
 export function sendrefererToAttr(attrs: string): string {
     return getAttr(attrs, 'sendreferer') === 'true' ? ' data-sendreferer="true"' : '';
+}
+
+/** WML 1.3: 9.10.1 The Onevent Element
+ *
+ * An onevent's task (go | prev | noop | refresh) as the data attributes
+ * runTask() reads: data-href or data-action, with the go's request
+ * attributes and the task's setvars.  '' for noop (or no task): nothing
+ * to run.  A task element may be empty (<refresh/>) or hold setvars. */
+function taskAttrs(inner: string): string {
+    const go = /<go\s+([^>]*?)href="([^"]*)"([^>]*?)(?:\/>|>([\s\S]*?)<\/go>)/i.exec(inner);
+    if (go) {
+        const goAttrs = (go[1] || '') + 'href="' + go[2] + '"' + (go[3] || '');
+        const content = go[4] || '';
+        return ` data-href="${escapeAttr(go[2])}"${methodToAttr(goAttrs)}${sendrefererToAttr(goAttrs)}` +
+            `${setvarsToAttr(extractSetvars(content))}${postfieldsToAttr(extractPostfields(content))}`;
+    }
+    const other = /<(refresh|prev)\b[^>]*?(?:\/>|>([\s\S]*?)<\/\1>)/i.exec(inner);
+    if (other) {
+        return ` data-action="${other[1].toLowerCase()}"${setvarsToAttr(extractSetvars(other[2] || ''))}`;
+    }
+    return '';
 }
 
 // ── WML format mask helpers ──────────────────────────────────────
@@ -286,32 +312,33 @@ export function convName(c: string | undefined): string | undefined {
 export function transformWmlBody(body: string, resolveImage: ImageResolver): string {
     let html = body;
 
-    // Process onevent elements (convert to data attributes)
-    // onevent with go task - extract setvars and postfields from inside go
-    html = html.replace(/<onevent\s+type="([^"]*)">[\s\S]*?<go\s+([^>]*?)href="([^"]*)"([^>]*?)(?:\/>|>([\s\S]*?)<\/go>)[\s\S]*?<\/onevent>/gi,
-        (_, type, preGoAttrs, href, postGoAttrs, goContent) => {
-            const goAttrs = (preGoAttrs || '') + 'href="' + href + '"' + (postGoAttrs || '');
-            const setvars = goContent ? extractSetvars(goContent) : [];
-            const postfields = goContent ? extractPostfields(goContent) : [];
-            return `<div class="wml-onevent" data-type="${escapeAttr(type)}" data-href="${escapeAttr(href)}"${methodToAttr(goAttrs)}${sendrefererToAttr(goAttrs)}${setvarsToAttr(setvars)}${postfieldsToAttr(postfields)} style="display:none"></div>`;
+    // An option's onpick (WML 1.3: 9.10, 11.6.2.2) rides on the option as
+    // data-onpick-* attributes: an HTML option holds text only, so a task
+    // element inside it would be dropped.  The onpick attribute is the
+    // onevent's short form, a go (9.10); a deck with both is in error
+    // (WML-S-69), and the onevent is taken.  An onevent of another type in
+    // an option is ignored (9.10.1).
+    html = html.replace(/<option\b([^>]*)>([\s\S]*?)<\/option>/gi, (_, attrs: string, content: string) => {
+        let task: string | null = null;
+        content = content.replace(/<onevent\s+([^>]*)>([\s\S]*?)<\/onevent>/gi, (_m, evAttrs: string, inner: string) => {
+            if (task === null && getAttr(evAttrs, 'type') === 'onpick') { task = taskAttrs(inner); }
+            return '';
         });
+        const href = getAttr(attrs, 'onpick');
+        if (task === null && href) { task = ` data-href="${escapeAttr(href)}"`; }
+        attrs = attrs.replace(/\s+onpick\s*=\s*"[^"]*"/gi, '');
+        const pick = (task || '').replace(/ data-([a-z-]+)="/g, ' data-onpick-$1="');
+        return `<option${attrs}${pick}>${content.trim()}</option>`;
+    });
 
-    // onevent with refresh task - extract setvars
-    html = html.replace(/<onevent\s+type="([^"]*)">([\s\S]*?)<refresh>([\s\S]*?)<\/refresh>[\s\S]*?<\/onevent>/gi,
-        (_, type, _pre, refreshContent) => {
-            const setvars = extractSetvars(refreshContent);
-            return `<div class="wml-onevent" data-type="${escapeAttr(type)}" data-action="refresh"${setvarsToAttr(setvars)} style="display:none"></div>`;
-        });
-
-    // onevent with prev task - extract setvars
-    html = html.replace(/<onevent\s+type="([^"]*)">([\s\S]*?)<prev(?:\s*\/>[\s\S]*?|>([\s\S]*?)<\/prev>[\s\S]*?)<\/onevent>/gi,
-        (_, type, _pre, prevContent) => {
-            const setvars = prevContent ? extractSetvars(prevContent) : [];
-            return `<div class="wml-onevent" data-type="${escapeAttr(type)}" data-action="prev"${setvarsToAttr(setvars)} style="display:none"></div>`;
-        });
-
-    // onevent with noop task
-    html = html.replace(/<onevent\s+type="([^"]*)">[\s\S]*?<noop\s*\/>[\s\S]*?<\/onevent>/gi, '');
+    // Other onevents become hidden task elements (WML 1.3: 9.10.1); a noop
+    // runs nothing
+    html = html.replace(/<onevent\s+([^>]*)>([\s\S]*?)<\/onevent>/gi, (_, evAttrs: string, inner: string) => {
+        const task = taskAttrs(inner);
+        if (!task) { return ''; }
+        const type = getAttr(evAttrs, 'type') || '';
+        return `<div class="wml-onevent" data-type="${escapeAttr(type)}"${task} style="display:none"></div>`;
+    });
 
     // Timer -> hidden data
     html = html.replace(/<timer\s+([^>]*?)\/>/gi, (_, attrs) => {
@@ -453,21 +480,6 @@ export function transformWmlBody(body: string, resolveImage: ImageResolver): str
         return result;
     });
 
-    // option with <onevent type="onpick"> child -> extract href into data-onpick attribute
-    html = html.replace(/<option([^>]*)>\s*<onevent\s+type="onpick">\s*<go\s+href="([^"]*)"[^>]*?(?:\/>|>[\s\S]*?<\/go>)\s*<\/onevent>([\s\S]*?)<\/option>/gi,
-        (_, attrs, href, text) => {
-            const value = getAttr(attrs, 'value');
-            const valueAttr = value !== undefined ? ` value="${escapeAttr(value)}"` : '';
-            return `<option${valueAttr} data-onpick="${escapeAttr(href)}">${text.trim()}</option>`;
-        });
-
-    // option with onpick shorthand -> data attribute
-    html = html.replace(/<option\s+onpick="([^"]*)">/gi,
-        '<option data-onpick="$1">');
-    html = html.replace(/<option\s+value="([^"]*)"\s+onpick="([^"]*)">/gi,
-        '<option value="$1" data-onpick="$2">');
-    html = html.replace(/<option\s+onpick="([^"]*)"\s+value="([^"]*)">/gi,
-        '<option value="$2" data-onpick="$1">');
 
     // select / option
     html = html.replace(/<select\s+([^>]*)>/gi, (_, attrs) => {
@@ -515,8 +527,20 @@ export function transformWmlBody(body: string, resolveImage: ImageResolver): str
         const height = getAttr(attrs, 'height') || '';
         // src is a URL (WML 1.3: 11.9): the resolvers escape it, so its
         // references are resolved first, or &amp; is sent as "&amp;"
-        const resolvedSrc = resolveImage(decodeEntities(src));
-        return `<img src="${resolvedSrc}" alt="${escapeAttr(alt)}" class="wml-img"${width ? ` width="${width}"` : ''}${height ? ` height="${height}"` : ''}>`;
+        const rawSrc = decodeEntities(src);
+        const rawAlt = decodeEntities(alt);
+        const size = `${width ? ` width="${width}"` : ''}${height ? ` height="${height}"` : ''}`;
+        // src (%HREF) and alt (%vdata) take variables, substituted at run
+        // time (WML 1.3: 10.3.1): such an image keeps its text in data-src /
+        // data-alt for updateVariables() to substitute and load, and again
+        // on each refresh (12.5.4).  Resolving "p/$(n).wbmp" here fetched
+        // that literal URL.
+        const dynAlt = hasVarRef(rawAlt) ? ` data-alt="${escapeHtml(rawAlt)}"` : '';
+        if (hasVarRef(rawSrc)) {
+            return `<img data-src="${escapeHtml(rawSrc)}" alt="${escapeAttr(alt)}"${dynAlt} class="wml-img"${size}>`;
+        }
+        const resolvedSrc = resolveImage(rawSrc);
+        return `<img src="${resolvedSrc}" alt="${escapeAttr(alt)}"${dynAlt} class="wml-img"${size}>`;
     });
 
     // <br/> normalization
